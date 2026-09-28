@@ -718,3 +718,395 @@ changes the UX, the protocol, or the permissions.
 - **Slice 1 message size.** `/ws` accepts messages up to 1 MiB in slice 1. D12 raises the
   limit to 26 MiB when image upload arrives in slice 3. Binary client messages get
   `bad_request` until then.
+
+## 11. Revision 2 — WebRTC transport and trackpad input (approved)
+
+Why: on a real iPhone, slice 1 felt unusable. The cursor reacted late, one-finger drags
+scrolled instead of moving the pointer, and the ack-gated JPEG stream updated slowly.
+The user often connects from mobile networks through Tailscale, so the transport must
+degrade gracefully under loss and variable bandwidth. The user approved these decisions:
+trackpad-style relative input, three-finger pan, long-press drag lock, focus once per
+target, and WebRTC from the start.
+
+Scope: this revision replaces D3, D7, D8, and D14, and amends D4, D9, and D18. Pairing,
+auth, the window list, text input (D10), permissions (D16), and later-slice features
+(D11–D13) are unchanged, except that their messages travel over the data channel
+(D22). Slices 2–4 keep their order after this revision ships.
+
+### D20. WebRTC library for the Mac: `stasel/WebRTC` (SwiftPM binary xcframework)
+- **Package:** `https://github.com/stasel/WebRTC.git`, pinned with `exact: "153.0.0"`
+  (Chromium milestone M153). This is a binary target: a prebuilt, universal
+  (arm64 + x86_64) `WebRTC.xcframework`, about 45 MB to download. It needs no Chromium
+  build, depot_tools, or Xcode project. It has been maintained for years and its
+  releases track Chromium milestones.
+- **License:** the build scripts are BSD-3-Clause, and the binary is Google's WebRTC
+  under its BSD-3-Clause license plus the WebRTC patent grant
+  (`https://webrtc.org/support/license`). The xcframework ships its `LICENSE`; the app
+  bundle copies it to `Contents/Resources/WebRTC-LICENSE`. H.264 encoding and decoding
+  use Apple VideoToolbox, not a bundled codec, so no H.264 codec library is
+  redistributed. The spike found no OpenH264 or FFmpeg symbols in the binary.
+- **Spike on this Mac (2026-09, deleted afterwards),** built with Swift 6.3.1 through
+  `xcrun swift build`:
+  - The package resolves and links. Swift can import the `WebRTC` module, and the
+    framework is embedded as `@rpath/WebRTC.framework`.
+  - `RTCDefaultVideoEncoderFactory` offers H.264 (profiles `640c1f` and `42e01f`), VP8,
+    VP9, and AV1.
+  - An in-process sender and receiver negotiated with **no ICE servers**, reached ICE
+    `connected` over host candidates, and moved a sendonly H.264 track and two data
+    channels (one unordered with `maxRetransmits = 0`, one reliable). `outbound-rtp`
+    reported `encoderImplementation = VideoToolbox`, and the receiver decoded every
+    encoded frame.
+  - Host candidate gathering with no STUN produced UDP and TCP candidates on every
+    interface, **including the tailnet's CGNAT (100.64.0.0/10) address**.
+  - **Found limitation (drives D21):** the stock H.264 encoder takes its VideoToolbox
+    profile *and level* from the negotiated `profile-level-id`. With the offered levels
+    (3.1), 1280×720 and 1024×768 encoded, but 1280×800, 1920×1080, and 2560×1600 failed
+    with `kVTParameterErr` (-12902) and the encoder suspended. The same sizes encoded
+    and decoded at level 5.2 (`640c34`). BGRA and NV12 input behaved the same.
+- **App integration:**
+  - `Package.swift` adds the product `WebRTC`. `scripts/build-app.sh` copies
+    `WebRTC.framework` from the build products into `Contents/Frameworks/`, adds the
+    `@executable_path/../Frameworks` rpath (a linker setting in `Package.swift`), and
+    signs the framework before the app (`codesign --force --sign` for each, inner first).
+  - `RTCInitializeSSL()` runs once at launch. One `RTCPeerConnectionFactory` lives for
+    the app's lifetime.
+- **Rejected alternatives:**
+  - Building Chromium WebRTC from source: hours of build, a large toolchain, and no
+    benefit for this app.
+  - Pure-Swift or other WebRTC stacks: none on SwiftPM offer a mature SRTP, congestion
+    control, and VideoToolbox H.264 path.
+  - A Pion (Go) sidecar: a second process and language, which breaks D1.
+  - LiveKit's `WebRTC-swift` binary: comparable, but it is tuned for the LiveKit SDK;
+    stasel/WebRTC is the plain upstream build.
+
+### D21. Video: ScreenCaptureKit → custom capturer → H.264 track
+- **Capture** stays one `SCStream` with `SCContentFilter(desktopIndependentWindow:)`
+  (D3/D4), with these changes:
+  - `pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange` (NV12). VideoToolbox
+    encodes it without a BGRA → YUV conversion.
+  - `minimumFrameInterval = 1/30 s` (up from 1/15). WebRTC drops frames itself when
+    bandwidth is short.
+  - `showsCursor = false`. The phone draws its own cursor overlay (D24), which is never
+    blurred by compression and never lags behind the video.
+  - `queueDepth = 5`, `ignoreShadowsSingleWindow = true`, and skipping non-`.complete`
+    frames stay. An idle window therefore produces no frames and no bandwidth.
+  - **Output size:** window points × `pointPixelScale`, long edge capped at 2560 px
+    (D4), then **rounded down to even width and height** (a 4:2:0 requirement).
+- **Capturer:** a `WindowVideoCapturer: RTCVideoCapturer` wraps each complete sample's
+  `CVPixelBuffer` in `RTCCVPixelBuffer` and calls
+  `source.capturer(_:didCapture:)` with `RTCVideoFrame(rotation: ._0,
+  timeStampNs: <sample PTS in ns>)`. The source is
+  `factory.videoSource(forScreenCast: true)`, so WebRTC treats it as screen content
+  (resolution is kept, and frame rate is reduced first under pressure).
+- **Encoder factory:** `ScreenH264EncoderFactory: RTCVideoEncoderFactory`.
+  - `supportedCodecs()` returns H.264 **Constrained Baseline `42e034` and High `640c34`
+    (level 5.2)**, with `packetization-mode=1` and `level-asymmetry-allowed=1`. Level
+    5.2 covers the 2560×1600 cap at 30 fps. Safari and VideoToolbox decode both.
+  - `createEncoder` delegates to `RTCVideoEncoderH264` with the negotiated info. The
+    spike showed that this combination encodes 1280×800, 1728×1117, and 2560×1600.
+  - Only H.264 is offered, so negotiation cannot silently pick a software codec.
+- **Track:** one sendonly video transceiver (`trackId = "window"`),
+  `setCodecPreferences` with the H.264 entries of `rtpSenderCapabilities`.
+  - Sender parameters: `degradationPreference = maintainResolution` (text stays sharp;
+    the frame rate drops instead), `maxBitrateBps = 8_000_000`,
+    `maxFramerate = 30`.
+  - Bitrate and frame rate then follow WebRTC's congestion control (transport-wide
+    congestion control, NACK retransmission, and PLI/FIR keyframe requests). The app
+    adds no bitrate logic of its own.
+- **Resize:** when the 500 ms bounds poll (D4) sees a size change, the server calls
+  `stream.updateConfiguration` with the new even-rounded size. The capturer then emits
+  frames of the new size, and the encoder reconfigures and sends a keyframe by itself.
+  The `<video>` element on the phone follows the intrinsic size change.
+- **Window change:** `view.start` for another window stops the old `SCStream` and starts
+  a new one feeding **the same capturer and track**. No renegotiation is needed.
+- **Idle:** when nothing is viewed, the transceiver stays; the capturer simply delivers
+  no frames.
+
+### D22. Signaling and data channels
+- **Signaling** runs over the existing authenticated `/ws` WebSocket (D2, D6), so it
+  inherits pairing, auth, and the single-client rule. The **phone is the offerer**; the
+  Mac answers. Each peer connection has a `pc` sequence number chosen by the client, and
+  the server ignores messages whose `pc` is not the current one.
+- **Order of events:**
+  1. After `hello`, the client creates an `RTCPeerConnection` with
+     `{iceServers: [], bundlePolicy: "max-bundle"}` and a `recvonly` video transceiver.
+  2. It creates the two data channels (below), creates an offer, applies it locally,
+     and sends `rtc.offer`.
+  3. The server creates its peer connection, attaches the track (D21), applies the offer,
+     answers, and sends `rtc.answer`.
+  4. Both sides trickle ICE candidates with `rtc.ice` as they are gathered. An end of
+     candidates is sent as `rtc.ice` with `candidate: null`.
+  5. When the client's `connectionState` becomes `connected`, the client sends
+     `windows.list` and continues as in slice 1.
+- **Data channels,** created by the client before the offer, so both are in the SDP:
+  | Label | Options | Carries |
+  |---|---|---|
+  | `motion` | `ordered: false`, `maxRetransmits: 0` | `move`, `scroll` |
+  | `control` | reliable, ordered (defaults) | every other input message, and all server results for input |
+  - Each data channel message is one UTF-8 JSON object with a `t` field (§4.2 style).
+  - Losing a `motion` message is harmless, because each `move` carries its own delta and
+    the next one continues; a lost delta only makes that one step shorter.
+- **What stays on the WebSocket:** `auth`, `hello`, `windows.list`/`windows`,
+  `view.start`/`view.stop`/`view.state`, `ping`, the `rtc.*` signaling messages, and
+  `error` for those. Input and input results move to the data channels. Upload and
+  clipboard messages (slices 2–3) use `control`; images larger than one data channel
+  message are split as described when slice 3 is implemented.
+- **Single client:** replacing a session (4002, D6) also closes its peer connection.
+
+### D23. Trackpad gestures (replaces D14)
+The viewer uses `touch-action: none`, so every gesture is custom. The recognizer is a
+pure state machine in `web/gestures.js` that consumes touch points and time and emits
+intents; `viewer.js` wires DOM events to it. Thresholds are constants at the top of the
+file.
+
+| Gesture | Effect |
+|---|---|
+| 1 finger move | Relative cursor move (D24). Never warps to the touch point. |
+| 1 finger tap | Left click at the current cursor. While a drag lock is active, the tap releases it instead (mouse up). |
+| 1 finger long-press | Starts a drag lock: left button down at the current cursor. Later 1-finger moves send drags. A **"Dragging — tap to release"** badge stays visible. |
+| 2 finger tap | Right click at the current cursor. |
+| 2 finger move | Scroll, both axes (natural direction: content follows the fingers). |
+| 3 finger move | Pan the zoomed view on the phone only. |
+| Pinch (2 fingers, distance changes) | Zoom the view on the phone only, 1× (fit) to 8×. The Fit button resets zoom and pan. |
+
+- **Thresholds:**
+  - `TAP_SLOP = 8` CSS px: a touch that moves less than this is still a tap or long-press
+    candidate. Movement is the max distance of any finger from its start.
+  - `TAP_MAX_MS = 250`: a tap lifts within this time.
+  - `LONG_PRESS_MS = 450`: a single finger held still this long starts the drag lock,
+    confirmed with a short vibration where `navigator.vibrate` exists (it does not on
+    iOS; the badge is the confirmation).
+  - `PINCH_START = 12` CSS px change in finger distance decides pinch over 2-finger
+    scroll. Once a 2-finger gesture is classified, it stays that kind until all fingers
+    lift.
+- **States:** `idle → one(pending) → one(moving) | tap | longPress`,
+  `idle → two(pending) → two(scroll) | two(pinch) | twoTap`, and
+  `three(pan)`. Adding a finger upgrades the gesture (1→2→3) and cancels a pending tap;
+  removing fingers ends it when the count reaches zero. A gesture never downgrades, so a
+  lifted second finger does not turn a scroll into a cursor move.
+- **Tap timing:** taps are sent on lift. There is no double-tap recognition, so a single
+  tap is never delayed. A double-click is two quick taps; the Mac turns them into a
+  double-click by itself when they are close in time and place (D26).
+- **Drag lock:** only a long-press starts it; only a tap (or disconnect) ends it. Two-
+  and three-finger gestures during a drag lock work normally and keep the button held.
+
+### D24. Relative cursor and the cursor overlay
+- **Source of truth:** the Mac owns the cursor position for the viewed window, stored
+  as window-normalized coordinates `(cu, cv)` in [0, 1] × [0, 1] on the input actor.
+  It starts at the window's center when viewing starts.
+- **Client delta → server:** a 1-finger move sends `{t:"move", dx, dy}` in
+  **window-normalized units**, computed from finger CSS px as
+  `dx = fingerDx × SENSITIVITY / (videoCssWidth × zoom)` (and likewise for `dy`), where
+  `videoCssWidth` is the width of the video at fit. So one finger-width of travel moves
+  the cursor the same distance on the visible video at any zoom, and `SENSITIVITY = 1.5`
+  makes a thumb-sized swipe cover a useful distance.
+  - Moves are coalesced in the client: at most one `move` per animation frame, carrying
+    the sum of deltas since the last send.
+- **Server:** it adds the delta to `(cu, cv)`, **clamps to [0, 1]**, maps to global
+  points with the window's current bounds (`bounds.origin + (cu × w, cv × h)`, queried
+  now), and posts `mouseMoved`, or `leftMouseDragged` while the drag lock is held.
+  - The cursor therefore never leaves the target window, and a window moved on the Mac
+    keeps the cursor at the same place inside it.
+- **Overlay:** the phone draws a cursor arrow over the `<video>` at `(cu, cv)`.
+  - The client predicts locally: it applies each sent delta immediately, with the same
+    clamp, so the arrow moves with the finger at display rate.
+  - The server confirms: on `control` it sends `{t:"cursor", u, v, seq}` after each
+    applied move batch, at most 30 times per second, where `seq` echoes the highest
+    `move.seq` it applied. The client re-bases its prediction on it and re-applies only
+    the deltas sent after `seq`. The overlay is thus correct even when `motion`
+    messages are lost.
+  - The overlay is drawn in video coordinates, so zoom and pan move it with the image.
+  - When the view is zoomed and the cursor leaves the visible area, the view does not
+    follow; the user pans with three fingers (approved behavior).
+- **Clicks, scrolls, and drags** act at `(cu, cv)` as confirmed by the server, never at
+  a touch point.
+- `stale_coordinates` is no longer produced: the clamp makes every cursor position valid.
+
+### D25. Focus policy (replaces the per-input wait in D8)
+- The input actor keeps `focusedWindowId`. Before an input that needs the window in
+  front (click, drag start, scroll, text, key), it checks whether the target is the
+  frontmost layer-0 window (D8 step 1, a cheap `CGWindowList` call).
+  - If it is frontmost, nothing else happens.
+  - If not, it runs D8 steps 2–3 (activate, AX raise) **once** and records the target
+    as focused. It does **not** poll or wait.
+- Focus is requested when viewing starts, when the viewed window changes, and when an
+  input finds the target not frontmost. It is never requested for a plain cursor
+  `move`: moving the pointer over a background window does not need focus.
+- **The first click after a focus change** is posted 80 ms after the raise, which gives
+  the window server time to put the window in front. This is the only delay, and it
+  applies only when a raise happened for that input.
+- **Coalescing:** the input actor keeps one pending `move` accumulator and one pending
+  `scroll` accumulator. Arriving moves and scrolls add to them; the actor drains them
+  before each discrete input and after each event loop turn. Discrete inputs (clicks,
+  drag state, keys, text) are ordered and never dropped. So cursor movement never
+  queues behind a slow input.
+
+### D26. Input injection changes (amends D9)
+- `move`: `mouseMoved` (or `leftMouseDragged` during a drag lock) at the new cursor
+  point. The event source is still `.hidSystemState`, posted to `.cghidEventTap`.
+- `click`: `leftMouseDown`/`leftMouseUp` at the cursor. The server tracks the last click
+  time and position; a second click within `NSEvent.doubleClickInterval` and 4 pt of
+  the first gets `mouseEventClickState = 2` (then 3), so double- and triple-clicks work
+  from quick taps.
+- `rightClick`: `rightMouseDown`/`rightMouseUp` at the cursor.
+- `drag`: `{state:"start"}` posts `leftMouseDown` at the cursor; `{state:"end"}` posts
+  `leftMouseUp` at the cursor. A disconnect, a peer connection failure, a window change,
+  or `view.stop` during a drag posts `leftMouseUp`, so a button is never left stuck.
+- `scroll`: `CGEvent(scrollWheelEvent2Source:units:.pixel, wheelCount:2, …)` at the
+  cursor, with deltas in points: `du × window.w` and `dv × window.h`, where the client
+  computes `du`/`dv` from finger movement divided by the fit-size video dimensions and
+  zoom, like `move` but without the sensitivity factor.
+- `text` and `key`: unchanged (D9, D10).
+
+### D27. ICE configuration and media failure
+- **ICE config:** `iceServers: []` on both sides. No STUN or TURN server is configured
+  or contacted, so no third party sees the connection.
+  - Candidates are host candidates only. The phone and the Mac both have a tailnet
+    address, so a host candidate pair over the tailnet interface connects directly
+    (or through Tailscale's own DERP relay when a direct path is impossible). The spike
+    confirmed that the Mac gathers its tailnet host candidate.
+  - Candidates from other interfaces (LAN, IPv6) are also offered. When the phone is on
+    the same LAN, ICE may pick a faster LAN pair; that is fine, because it is still
+    DTLS-SRTP between the paired devices.
+  - The Mac keeps `continualGatheringPolicy = gatherContinually`, so a new interface
+    (for example, the phone switching from Wi-Fi to cellular) is handled by ICE restart
+    from the client (below).
+  - Candidate addresses are never logged, only their type and protocol.
+- **Client state handling** (`RTCPeerConnection.connectionState`):
+  | State | Client behavior | User sees |
+  |---|---|---|
+  | `connecting` (up to 10 s) | wait | "Connecting video…" over the last image |
+  | `connected` | clear overlays | video |
+  | `disconnected` | wait 3 s for recovery, then send an ICE restart offer (`iceRestart: true`) | "Reconnecting…" |
+  | `failed`, or `connecting` longer than 10 s | close the peer connection and start a fresh one once; if that also fails, stop and show the error | "Could not connect video over the tailnet. Check that Tailscale is on for both devices." with a **Retry** button |
+  - If the WebSocket itself drops, the peer connection is closed and D18's reconnect
+    runs; after `hello`, a fresh peer connection is negotiated and the last window is
+    resumed.
+  - **There is no fallback to JPEG.** The old pipeline is deleted (D3).
+- **Server:** a peer connection that is `failed` or `closed` stops capture, releases a
+  held button (D26), and releases the display assertion (D15). Only one peer connection
+  exists; a new `rtc.offer` replaces the old one.
+
+### D28. Protocol changes (amends §4)
+WebSocket, client → server (new):
+```jsonc
+{"t":"rtc.offer","pc":1,"sdp":"v=0…"}
+{"t":"rtc.ice","pc":1,"candidate":"candidate:… typ host …","sdpMid":"0","sdpMLineIndex":0}
+{"t":"rtc.ice","pc":1,"candidate":null}
+```
+WebSocket, server → client (new):
+```jsonc
+{"t":"rtc.answer","pc":1,"sdp":"v=0…"}
+{"t":"rtc.ice","pc":1,"candidate":"…","sdpMid":"0","sdpMLineIndex":0}
+```
+Removed from the WebSocket: `frame.ack`, the binary `frame` message, `pointer`,
+`scroll`, `text`, and `key` (they move to the data channels).
+
+Data channel `motion`, client → server:
+```jsonc
+{"t":"move","seq":812,"dx":0.0123,"dy":-0.004}
+{"t":"scroll","du":0.0,"dv":-0.03}
+```
+Data channel `control`, client → server:
+```jsonc
+{"t":"click"}                       // left click at cursor (or releases a drag lock: the client sends drag end instead)
+{"t":"rightClick"}
+{"t":"drag","state":"start|end"}
+{"t":"text","text":"こんにちは"}
+{"t":"key","key":"Enter","mods":[]}
+```
+Data channel `control`, server → client:
+```jsonc
+{"t":"cursor","u":0.431,"v":0.227,"seq":812}
+{"t":"error","code":"permission_accessibility","message":"…"}
+```
+- `view.state` gains nothing; the client learns the window size from the `<video>`
+  element's intrinsic size, and the overlay uses normalized coordinates, so no frame
+  header is needed.
+- Validation: `dx`, `dy`, `du`, `dv` must be finite and within [-1, 1]; `seq` is a
+  non-negative integer; `state` is one of the two values. Anything else is
+  `bad_request` on `control` and silently dropped on `motion`.
+- Error codes: `stale_coordinates` is removed. `rtc_failed` is added for a server-side
+  failure to create an answer (sent on the WebSocket, with the client showing the D27
+  error).
+
+### D29. Source changes
+| File | Change |
+|---|---|
+| `mac/Package.swift` | add `stasel/WebRTC` `exact: "153.0.0"`; rpath linker setting |
+| `scripts/build-app.sh` | embed and sign `WebRTC.framework`; copy its LICENSE |
+| `RTCHost.swift` (new) | factory, encoder factory (D21), peer connection lifecycle, signaling, data channel routing |
+| `WindowVideoCapturer.swift` (new) | `RTCVideoCapturer` subclass fed from `SCStream` samples |
+| `CaptureSession.swift` | NV12, even sizes, 30 fps, no cursor; deliver buffers to the capturer; remove JPEG encode, ack flow control, and the frame header ring |
+| `CursorState.swift` (new, replaces `CoordinateMapper.swift`) | pure: apply delta + clamp, map to global point with current bounds, click-count tracking |
+| `WindowFocuser.swift` | focus-once policy (D25), no polling wait |
+| `InputInjector.swift` / `MacBackend.swift` | coalesced move/scroll, drag lock, release on teardown |
+| `Protocol.swift` / `Session.swift` | `rtc.*` messages; data channel message decode; remove frame messages |
+| `web/rtc.js` (new) | peer connection, signaling, data channels, D27 state handling |
+| `web/gestures.js` (new) | pure gesture state machine (D23) |
+| `web/viewer.js` | `<video>` instead of canvas, zoom/pan transform, cursor overlay, drag badge |
+| `web/app.js` | wire rtc and viewer; remove binary frame handling |
+
+### D30. Revision 2 acceptance criteria
+All device checks run on a real iPhone (Safari) against the real Mac through
+`tailscale serve`, first on the same Wi-Fi and then with the phone **on cellular with
+Wi-Fi off**.
+1. After pairing and picking a window, video appears within 3 s on Wi-Fi and within 5 s
+   on cellular. The Mac log shows the negotiated codec H.264 and encoder VideoToolbox.
+2. Typing in a Mac window shows the change on the phone within about 200 ms on Wi-Fi
+   (judged by eye against the Mac screen). Scrolling a long page stays fluid rather than
+   stepping frame by frame.
+3. An idle window sends almost nothing: the WebRTC stats on the Mac show the outbound
+   bitrate falling to near zero within 5 s of the window becoming static.
+4. One-finger movement moves the Mac pointer relatively, in the finger's direction, with
+   no jump to the touch point. The overlay arrow on the phone and the real Mac pointer
+   end at the same place. The pointer never leaves the window.
+5. A tap clicks at the overlay arrow. Two quick taps on a word select it. A two-finger
+   tap opens a context menu. A two-finger move scrolls a page vertically and
+   horizontally; a one-finger move never scrolls. A three-finger move pans the zoomed
+   view; pinch zooms to 8× and Fit resets.
+6. A long-press shows "Dragging — tap to release"; moving then drags (for example, selects
+   text or moves a window's slider); a tap releases. Disconnecting Wi-Fi during a drag
+   leaves no stuck button on the Mac.
+7. Operating a window that is behind another brings it to the front once; later inputs
+   to it have no added delay. Plain cursor movement does not bring it to the front.
+8. Switching the phone from Wi-Fi to cellular while viewing recovers within 10 s with
+   "Reconnecting…" shown in between. Turning Tailscale off on the phone shows the D27
+   error with Retry; turning it on and tapping Retry recovers.
+9. Text input (D10) still works, including Japanese IME and dictation.
+10. *Unit:*
+    - Gesture state machine: tap, long-press, move, drag lock and release, two-finger
+      tap, scroll versus pinch classification, three-finger pan, and the finger-count
+      upgrade and no-downgrade rules.
+    - `CursorState`: delta application, clamping at all edges, mapping to a moved
+      window, and click-count timing and distance.
+    - Data channel and signaling message decoding, including rejecting non-finite or
+      out-of-range deltas.
+
+### D31. Human setup changes
+- A rebuilt ad-hoc-signed app needs Screen Recording and Accessibility granted again
+  (D17). The practical fix is switching the existing entry off and on in System
+  Settings, which a person must do.
+- No new permission is needed. WebRTC uses outgoing and incoming UDP on the tailnet
+  interface; with the macOS application firewall on, macOS may ask once whether
+  `MacWindowRemote` may accept incoming connections, and a person must allow it.
+- `tailscale serve` is unchanged: it still carries only the page and the signaling
+  WebSocket. Media does not go through it.
+- The README gains a "Using it on cellular" note: Tailscale must be on for both
+  devices, and no port forwarding is needed.
+
+### Revision 2 risks (to be checked on the device)
+- **Safari H.264 profile:** Safari on iOS accepts both offered profiles in practice, but
+  the answer's chosen `profile-level-id` must be checked on the device (acceptance 1).
+- **Tailnet UDP path:** when Tailscale cannot make a direct path, traffic goes through
+  DERP relays, which carry UDP-in-TCP and add latency. That is Tailscale's behavior, not
+  something the app controls; the acceptance run on cellular shows the real result.
+- **iOS Safari background:** Safari suspends the peer connection when the page is hidden;
+  D15/D18 already close and rebuild the session on `visibilitychange`.
+- **ICE on iOS without STUN:** Safari hides local addresses behind mDNS names for pages
+  without camera permission. The Mac library resolves `.local` mDNS candidates only on
+  the same LAN, so on cellular the phone's tailnet candidate must be offered as a raw
+  address or the connection must be completed by the Mac's candidates (the phone then
+  learns a peer-reflexive candidate). The spike did not cover a phone; acceptance 1 on
+  cellular is the check. If it fails, the fix to design is a Mac-side note in D27, not a
+  public STUN server.
