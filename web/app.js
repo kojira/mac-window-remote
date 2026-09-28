@@ -1,5 +1,6 @@
-// State machine and socket (DESIGN.md D16, D18, D32, §3, §4).
+// State machine, socket, and video link (DESIGN.md D16, D18, D22, D27, D32, §3, §4).
 import { Viewer } from './viewer.js';
+import { VideoLink } from './rtc.js';
 import { TextInput } from './input.js';
 
 const WINDOW_KEY = 'mwr.windowId';
@@ -18,6 +19,9 @@ let reconnectTimer = null;
 let deadTimer = null;
 let replaced = false;
 let screen = null;
+let viewOverlay = ''; // what the Mac reported for the view; the video link's state goes on top
+
+const VIDEO_FAILED = 'Could not connect video over the tailnet. Check that Tailscale is on for both devices.';
 
 // ---------- access (D32) ----------
 
@@ -106,7 +110,10 @@ function refreshList() {
   send({ t: 'windows.list' });
 }
 
-$('refresh').addEventListener('click', refreshList);
+$('refresh').addEventListener('click', () => {
+  if (link.status === 'failed') link.retry(); else refreshList();
+});
+$('retry').addEventListener('click', () => link.retry());
 $('back').addEventListener('click', () => {
   send({ t: 'view.stop' });
   showList();
@@ -119,7 +126,7 @@ function openWindow(id, title) {
   viewer.clear();
   show('viewer');
   viewer.showBar();
-  overlay('');
+  viewMessage('');
   send({ t: 'view.start', windowId: id });
 }
 
@@ -128,10 +135,31 @@ function viewingWindowId() {
   return v ? Number(v) : null;
 }
 
-function overlay(text) {
-  const o = $('viewer-overlay');
-  o.textContent = text || '';
-  o.hidden = !text;
+function overlay(text, { retry = false } = {}) {
+  $('viewer-overlay-text').textContent = text || '';
+  $('retry').hidden = !retry;
+  $('viewer-overlay').hidden = !text;
+}
+
+/// The viewer overlay: the video link state first (D27), then the view state (D18).
+function viewMessage(text) {
+  viewOverlay = text || '';
+  showVideoStatus(link.status);
+}
+
+function showVideoStatus(status) {
+  if (screen === 'list') {
+    if (status === 'failed') listMessage(VIDEO_FAILED + ' Tap Refresh to retry.');
+    else if (status !== 'connected') listMessage('Connecting…');
+    return;
+  }
+  if (screen !== 'viewer') return;
+  switch (status) {
+    case 'connecting': overlay('Connecting video…'); break;
+    case 'reconnecting': overlay('Reconnecting…'); break;
+    case 'failed': overlay(VIDEO_FAILED, { retry: true }); break;
+    default: overlay(viewOverlay);
+  }
 }
 
 // ---------- socket ----------
@@ -153,19 +181,15 @@ function connect() {
     $('viewer-title').textContent = sessionStorage.getItem(TITLE_KEY) || '';
   }
   const ws = new WebSocket(wsURL());
-  ws.binaryType = 'arraybuffer';
   socket = ws;
   ws.onopen = () => armDeadTimer();
   ws.onmessage = (ev) => {
     if (ws !== socket) return;
     armDeadTimer();
-    if (typeof ev.data === 'string') {
-      let msg;
-      try { msg = JSON.parse(ev.data); } catch { return; }
-      onMessage(msg);
-    } else {
-      viewer.onFrame(ev.data);
-    }
+    if (typeof ev.data !== 'string') return;
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { return; }
+    onMessage(msg);
   };
   ws.onclose = (ev) => {
     if (ws !== socket) return;
@@ -173,6 +197,7 @@ function connect() {
     authed = false;
     clearTimeout(deadTimer);
     setConnDots('off');
+    link.close();
     viewer.endInput();
     onClosed(ev.code);
   };
@@ -180,6 +205,7 @@ function connect() {
 
 function closeSocket() {
   clearTimeout(deadTimer);
+  link.close();
   if (socket) {
     const s = socket;
     socket = null;
@@ -231,6 +257,7 @@ function showReplaced() {
   }
 }
 
+/// A WebSocket message: auth, window list, viewing, and signaling (D22).
 export function send(msg) {
   if (!socket || !authed || socket.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(msg));
@@ -244,18 +271,14 @@ function onMessage(msg) {
       backoffIndex = 0;
       permissions = msg.permissions || permissions;
       setConnDots('on');
-      if (screen === 'viewer' && viewingWindowId() != null) {
-        overlay('');
-        viewer.setDimmed(false);
-        if (!permissions.screenRecording) {
-          overlay('Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
-        }
-        send({ t: 'view.start', windowId: viewingWindowId() });
-      } else {
-        show('list');
-        listMessage('');
-        refreshList();
-      }
+      if (!(screen === 'viewer' && viewingWindowId() != null)) show('list');
+      // Video and input need the peer connection; the list and viewing continue once it is
+      // connected (D22 step 5).
+      link.start();
+      break;
+    case 'rtc.answer':
+    case 'rtc.ice':
+      link.onSignal(msg);
       break;
     case 'windows':
       renderWindows(msg.items || []);
@@ -266,10 +289,34 @@ function onMessage(msg) {
     case 'error':
       onError(msg);
       break;
+    case 'ping':
+      break;
+  }
+}
+
+/// The peer connection is connected and `control` is open: resume the viewer or the list.
+function onVideoReady() {
+  if (screen === 'viewer' && viewingWindowId() != null) {
+    viewer.clear();
+    viewer.setDimmed(false);
+    viewMessage(permissions.screenRecording ? ''
+      : 'Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
+    send({ t: 'view.start', windowId: viewingWindowId() });
+  } else {
+    show('list');
+    listMessage('');
+    refreshList();
+  }
+}
+
+/// Messages from the Mac on the `control` data channel (D22, D28).
+function onControl(msg) {
+  switch (msg.t) {
     case 'cursor':
       viewer.onCursor(msg);
       break;
-    case 'ping':
+    case 'error':
+      onError(msg);
       break;
   }
 }
@@ -280,8 +327,9 @@ function onViewState(msg) {
     case 'starting':
       break;
     case 'streaming':
-      overlay('');
+      viewMessage('');
       viewer.setDimmed(false);
+      viewer.awaitFirstFrame();
       break;
     case 'window_gone':
       showList();
@@ -289,7 +337,7 @@ function onViewState(msg) {
       break;
     case 'capture_unavailable':
       viewer.setDimmed(true);
-      overlay(msg.reason === 'permission_screen_recording'
+      viewMessage(msg.reason === 'permission_screen_recording'
         ? 'Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.'
         : 'Mac screen unavailable (locked or asleep?) — retrying');
       break;
@@ -305,12 +353,15 @@ function onError(msg) {
       permissions.screenRecording = false;
       if (screen === 'list') refreshList();
       return;
+    case 'rtc_failed':
+      link.fail();
+      return;
     default:
       toast(msg.message || msg.code);
   }
 }
 
-// Frames stop when nobody is watching (D15): close when hidden, reconnect when visible.
+// Capture stops when nobody is watching (D15): close when hidden, reconnect when visible.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     clearTimeout(reconnectTimer);
@@ -328,14 +379,25 @@ document.addEventListener('visibilitychange', () => {
 
 // ---------- wiring ----------
 
+const link = new VideoLink({
+  video: $('video'),
+  signal: send,
+  onStatus: showVideoStatus,
+  onReady: onVideoReady,
+  onControl,
+});
+
+/// Input messages go on the data channels (D22).
+const sendInput = (msg) => link.send(msg);
+
 const viewer = new Viewer({
   stage: $('stage'),
-  canvas: $('canvas'),
+  video: $('video'),
   cursor: $('cursor'),
   dragBadge: $('drag-badge'),
   bar: $('viewer-bar'),
-  send,
-  canInput: () => screen === 'viewer' && authed,
+  send: sendInput,
+  canInput: () => screen === 'viewer' && authed && link.canSend(),
 });
 $('fit').addEventListener('click', () => viewer.fit());
 
@@ -343,7 +405,7 @@ const textInput = new TextInput({
   field: $('text'),
   button: $('keyboard'),
   bar: $('bottom-bar'),
-  send,
+  send: sendInput,
 });
 
 // Earlier versions paired with a stored secret; it is no longer used.

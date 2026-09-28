@@ -1,5 +1,6 @@
-// Canvas, zoom/pan transform, trackpad input, and the cursor overlay (DESIGN.md D23, D24).
-// Frames are JPEG over the WebSocket until the WebRTC video track replaces them (D21).
+// Video, zoom/pan transform, trackpad input, and the cursor overlay (DESIGN.md D21, D23, D24).
+// The window arrives as a WebRTC video track (rtc.js); the overlay uses the video's intrinsic
+// size, and the cursor is in window-normalized coordinates, so no frame header is needed.
 import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
 
 const MAX_ZOOM = 8;
@@ -12,17 +13,16 @@ const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
 const clamp1 = (x) => Math.min(Math.max(x, -1), 1);
 
 export class Viewer {
-  constructor({ stage, canvas, cursor, dragBadge, bar, send, canInput }) {
+  constructor({ stage, video, cursor, dragBadge, bar, send, canInput }) {
     this.stage = stage;
-    this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
+    this.video = video;
     this.cursorEl = cursor;
     this.dragBadge = dragBadge;
     this.bar = bar;
     this.send = send;
     this.canInput = canInput;
-    this.header = null;
-    this.scale = 1; // CSS px per image px
+    this.size = null; // {width, height}: the video's intrinsic size, while a frame is shown
+    this.scale = 1; // CSS px per video px
     this.tx = 0;
     this.ty = 0;
     this.barTimer = null;
@@ -35,58 +35,59 @@ export class Viewer {
     stage.addEventListener('touchmove', (e) => this.onTouch(e, 'move'), { passive: false });
     stage.addEventListener('touchend', (e) => this.onTouch(e, 'end'), { passive: false });
     stage.addEventListener('touchcancel', (e) => this.onTouch(e, 'cancel'), { passive: false });
+    video.addEventListener('resize', () => this.onVideoSize());
+    video.addEventListener('loadedmetadata', () => this.onVideoSize());
     window.addEventListener('resize', () => this.relayout());
     if (window.visualViewport) window.visualViewport.addEventListener('resize', () => this.relayout());
   }
 
-  // ---------- frames ----------
+  // ---------- video ----------
 
-  async onFrame(buffer) {
-    const view = new DataView(buffer);
-    if (buffer.byteLength < 4) return;
-    const len = view.getUint32(0, false);
-    let header;
-    try {
-      header = JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 4, len)));
-    } catch { return; }
-    if (header.t !== 'frame') return;
-    const jpeg = new Blob([new Uint8Array(buffer, 4 + len)], { type: 'image/jpeg' });
-    try {
-      const bitmap = await createImageBitmap(jpeg);
-      this.draw(header, bitmap);
-      bitmap.close && bitmap.close();
-    } catch { /* undecodable frame: skip it but still ack */ }
-    this.send({ t: 'frame.ack', frameId: header.frameId });
-  }
-
-  draw(header, bitmap) {
-    const sizeChanged = !this.header || this.header.width !== header.width || this.header.height !== header.height;
-    const hadFrame = !!this.header;
+  /// The first frame after `clear()`, or a window resize on the Mac (D21: the encoder
+  /// follows the capture size and the video's intrinsic size changes).
+  onVideoSize() {
+    const width = this.video.videoWidth;
+    const height = this.video.videoHeight;
+    if (!width || !height || this.waitingForFrame) return;
+    const hadFrame = !!this.size;
+    if (hadFrame && this.size.width === width && this.size.height === height) return;
     const zoom = hadFrame ? this.scale / this.fitScale() : 1;
-    this.header = header;
-    if (sizeChanged) {
-      this.canvas.width = header.width;
-      this.canvas.height = header.height;
-    }
-    this.ctx.drawImage(bitmap, 0, 0);
+    this.size = { width, height };
+    this.video.style.width = `${width}px`;
+    this.video.style.height = `${height}px`;
+    this.video.classList.remove('waiting');
     if (!hadFrame) this.fit();
-    else if (sizeChanged) { this.scale = this.fitScale() * zoom; this.clampAndApply(); }
-    else this.placeCursor();
+    else { this.scale = this.fitScale() * zoom; this.clampAndApply(); }
   }
 
   /// Leaving the viewer or switching windows: forget the image, the cursor, and any drag.
+  /// The track keeps playing; the video stays invisible until the next window's first frame.
+  /// It is made transparent rather than hidden, so `requestVideoFrameCallback` still fires.
   clear() {
-    this.header = null;
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    this.canvas.width = 0;
-    this.canvas.height = 0;
+    this.size = null;
+    this.video.classList.add('waiting');
     this.setDimmed(false);
     this.resetCursor();
     this.endInput();
+    this.waitingForFrame = true;
+    this.frameToken = null;
   }
 
-  /// The socket closed: the Mac releases a held button by itself (D26), and the next
-  /// session sends its own cursor, so the old one is forgotten.
+  /// The Mac started streaming the selected window: show the next frame that arrives, so a
+  /// late frame of the previous window is never shown as this one.
+  awaitFirstFrame() {
+    const token = (this.frameToken = {});
+    const shown = () => {
+      if (this.frameToken !== token) return;
+      this.waitingForFrame = false;
+      this.onVideoSize();
+    };
+    if (this.video.requestVideoFrameCallback) this.video.requestVideoFrameCallback(shown);
+    else shown();
+  }
+
+  /// The socket or peer connection closed: the Mac releases a held button by itself (D26), and
+  /// the next session sends its own cursor, so the old one is forgotten.
   endInput() {
     this.cursorBase = null;
     this.cursorEl.hidden = true;
@@ -106,10 +107,10 @@ export class Viewer {
   // ---------- transform ----------
 
   fitScale() {
-    if (!this.header) return 1;
+    if (!this.size) return 1;
     const w = this.stage.clientWidth;
     const h = this.stage.clientHeight;
-    return Math.min(w / this.header.width, h / this.header.height);
+    return Math.min(w / this.size.width, h / this.size.height);
   }
 
   fit() {
@@ -118,22 +119,22 @@ export class Viewer {
   }
 
   relayout() {
-    if (!this.header) return;
+    if (!this.size) return;
     this.scale = Math.max(this.scale, this.fitScale());
     this.clampAndApply();
   }
 
   clampAndApply() {
-    if (!this.header) return;
+    if (!this.size) return;
     const fit = this.fitScale();
     this.scale = Math.min(Math.max(this.scale, fit), fit * MAX_ZOOM);
     const sw = this.stage.clientWidth;
     const sh = this.stage.clientHeight;
-    const iw = this.header.width * this.scale;
-    const ih = this.header.height * this.scale;
+    const iw = this.size.width * this.scale;
+    const ih = this.size.height * this.scale;
     this.tx = iw <= sw ? (sw - iw) / 2 : Math.min(0, Math.max(sw - iw, this.tx));
     this.ty = ih <= sh ? (sh - ih) / 2 : Math.min(0, Math.max(sh - ih, this.ty));
-    this.canvas.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+    this.video.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
     this.placeCursor();
   }
 
@@ -191,7 +192,7 @@ export class Viewer {
           break;
         case 'rightClick': this.sendInput({ t: 'rightClick' }); break;
         case 'dragStart':
-          if (!this.header || !this.canInput()) { this.gestures.releaseDragLock(); break; }
+          if (!this.size || !this.canInput()) { this.gestures.releaseDragLock(); break; }
           if (navigator.vibrate) navigator.vibrate(15);
           this.dragBadge.hidden = false;
           this.sendInput({ t: 'drag', state: 'start' });
@@ -211,14 +212,14 @@ export class Viewer {
   }
 
   sendInput(msg) {
-    if (!this.header || !this.canInput()) return;
+    if (!this.size || !this.canInput()) return;
     this.flushMotion();
     this.send(msg);
   }
 
   /// Pinch: zoom by the distance change around the midpoint, and follow the midpoint.
   zoomBy({ factor, x, y, dx, dy }) {
-    if (!this.header) return;
+    if (!this.size) return;
     const ix = (x - dx - this.tx) / this.scale;
     const iy = (y - dy - this.ty) / this.scale;
     const fit = this.fitScale();
@@ -238,15 +239,14 @@ export class Viewer {
     this.cursorEl.hidden = true;
   }
 
-  /// Size of the window content on screen, in CSS px at the current zoom.
+  /// Size of the window on screen, in CSS px at the current zoom (D24).
   contentCss() {
-    const c = this.header.content;
-    return { w: c.w * this.scale, h: c.h * this.scale };
+    return { w: this.size.width * this.scale, h: this.size.height * this.scale };
   }
 
   /// At most one `move` per animation frame, carrying the sum since the last send.
   queueMove(dx, dy) {
-    if (!this.header || !this.canInput() || !this.cursorBase) return;
+    if (!this.size || !this.canInput() || !this.cursorBase) return;
     const size = this.contentCss();
     const du = dx * SENSITIVITY / size.w;
     const dv = dy * SENSITIVITY / size.h;
@@ -257,7 +257,7 @@ export class Viewer {
 
   /// Scroll deltas are normalized like moves, without the sensitivity factor (D26).
   queueScroll(dx, dy) {
-    if (!this.header || !this.canInput()) return;
+    if (!this.size || !this.canInput()) return;
     const size = this.contentCss();
     if (this.pendingScroll) { this.pendingScroll.du += dx / size.w; this.pendingScroll.dv += dy / size.h; return; }
     this.pendingScroll = { du: dx / size.w, dv: dy / size.h };
@@ -293,11 +293,10 @@ export class Viewer {
   }
 
   placeCursor() {
-    if (!this.cursorBase || !this.header) { this.cursorEl.hidden = true; return; }
+    if (!this.cursorBase || !this.size) { this.cursorEl.hidden = true; return; }
     const { u, v } = this.predictedCursor();
-    const c = this.header.content;
-    const x = this.tx + (c.x + u * c.w) * this.scale;
-    const y = this.ty + (c.y + v * c.h) * this.scale;
+    const x = this.tx + u * this.size.width * this.scale;
+    const y = this.ty + v * this.size.height * this.scale;
     this.cursorEl.style.transform = `translate(${x}px, ${y}px)`;
     this.cursorEl.hidden = false;
   }
