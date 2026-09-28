@@ -173,3 +173,96 @@ The user experience, end to end:
 - No rate limiting and no Origin checks. The secret has 256 bits, the server is reachable
   only through the tailnet, and nothing else carries authority.
 
+### D7. Coordinate mapping (touch → image → window points → global points)
+- **Frame header** (§4.1) carries:
+  - `frameId`, `windowId`
+  - `width`, `height`: image size in px
+  - `content: {x, y, w, h}`: the window's content rect inside the image, in px. This is
+    derived from `SCStreamFrameInfo.contentRect × contentScale` and equals the full image
+    except briefly during a resize.
+  - `window: {x, y, w, h}`: the window's global frame in **points** at capture time. The
+    origin is top-left, using the CG global display coordinates that CGEvent also uses.
+- **Client:**
+  1. The client draws the image on a `<canvas>` with a CSS transform for zoom and pan.
+  2. For a touch, it inverts the transform to get image px `(ix, iy)`.
+  3. It normalizes against the content rect: `u = (ix − content.x)/content.w`,
+     `v = (iy − content.y)/content.h`.
+  4. If `u` or `v` is outside [0, 1], it ignores the touch (no click).
+  5. It sends `{u, v, frameId}`.
+- **Server:**
+  1. The server keeps the headers of the last 16 frames sent.
+  2. It looks up `frameId`. If the id is unknown, it uses the latest frame.
+  3. It computes `p = currentOrigin + (u × frame.window.w, v × frame.window.h)`, where
+     `currentOrigin` is the window's bounds origin **queried right now**, so a moved
+     window still gets the right point.
+  4. The size comes from the frame the user saw, because after a resize the content is
+     normally anchored top-left.
+  5. If `p` is outside the current bounds, the input is rejected with error
+     `stale_coordinates` and nothing is clicked.
+- Retina scale never reaches the client, because normalized coordinates hide it.
+- Scroll deltas are converted the same way. The client sends deltas in content-normalized
+  units, `du` and `dv`, and the server multiplies them by `frame.window.w/h` to get
+  points.
+
+### D8. Focusing the target window
+Before every input (pointer, scroll, text, key, paste), the input actor does the
+following:
+1. **Is the window already frontmost?** It checks the first layer-0 on-screen window in
+   `CGWindowListCopyWindowInfo(.optionOnScreenOnly)`. If that has the target `windowId`,
+   the rest of this list is skipped.
+2. **Activate the owning app:** `NSRunningApplication(processIdentifier: pid).activate()`.
+3. **Raise the window through Accessibility:**
+   - The app gets `AXUIElementCreateApplication(pid)` and reads `kAXWindowsAttribute`.
+   - It picks the AX window whose `AXPosition` and `AXSize` equal the CG bounds (within
+     1 pt). Among several matches, it prefers the one whose `AXTitle` equals the CG
+     window name.
+   - It performs `kAXRaiseAction` and sets `kAXMainAttribute = true`.
+   - If nothing matches, activating the app is the best effort.
+   - **No private APIs** (such as `_AXUIElementGetWindow`).
+4. **Wait for the result:** it polls step 1 every 20 ms, up to **300 ms**, then posts the
+   input anyway.
+
+### D9. Input injection with CGEvent
+- Events come from `CGEventSource(stateID: .hidSystemState)` and are posted to
+  `.cghidEventTap`.
+- All input is processed **in order** on one serial input actor.
+- **Click:** `mouseMoved` to `p`, then `leftMouseDown` and `leftMouseUp` with
+  `mouseEventClickState = n`. A double-click is two down/up pairs with click state 1
+  and then 2.
+- **Right-click:** `rightMouseDown` and `rightMouseUp`.
+- **Drag:** `leftMouseDown` at the start, `leftMouseDragged` for each move, and
+  `leftMouseUp` at the end. If the socket closes during a drag, the server posts
+  `leftMouseUp` at the last point, so a button is never left stuck.
+- **Scroll:** move the pointer to `p`, then post
+  `CGEvent(scrollWheelEvent2Source:units:.pixel, wheelCount:2, …)` with the point deltas.
+  The direction is "natural": content follows the finger.
+- **Text (committed Unicode):**
+  - Text is split into grapheme-cluster-safe chunks of **≤ 20 UTF-16 units** (the CGEvent
+    Unicode string limit).
+  - Each chunk is a keyDown/keyUp pair with `keyboardSetUnicodeString` and virtual key 0,
+    with modifier flags cleared.
+  - `\n` is sent as a Return key and `\t` as a Tab key.
+  - **IME safety:** a Mac input method, such as Japanese kana mode, could reinterpret
+    these events. Before typing, the injector saves `TISCopyCurrentKeyboardInputSource()`,
+    selects `TISCopyCurrentASCIICapableKeyboardLayoutInputSource()`, types, and then
+    restores the saved source. Text therefore never goes through the Mac IME.
+- **Special keys and combos:**
+  - Named keys map to `kVK_*` virtual key codes (table in §4.3), using ANSI positions for
+    letters, digits, and punctuation.
+  - A combo is modifier keyDowns (`kVK_Command`/`Control`/`Option`/`Shift`, with
+    cumulative flags), then the key down/up with flags, then modifier keyUps in reverse.
+
+### D10. iPhone text input: compose on the phone, send on Return
+- The input bar has a normal `<input type="text">` field, with autocorrect and
+  autocapitalize off. The user types, uses Japanese IME conversion, or dictates entirely
+  **on the phone**. Nothing is sent while the text is being composed.
+- **Return** (the `keydown` Enter with `isComposing == false`):
+  - If the field is non-empty: send `text` with the field's value, then clear the field.
+    This sends the text only, without Enter.
+  - If the field is empty: send `key Enter`.
+- **Backspace in an empty field** (`beforeinput` `deleteContentBackward` on an empty
+  value) sends `key Backspace`.
+- **Why:** it is deterministic with IME candidates, predictive text, and dictation
+  revisions, which all edit the field before commit. Streaming every keystroke would
+  break them.
+
