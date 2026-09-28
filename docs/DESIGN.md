@@ -799,14 +799,20 @@ auth, the window list, text input (D10), permissions (D16), and later-slice feat
   `factory.videoSource(forScreenCast: true)`, so WebRTC treats it as screen content
   (resolution is kept, and frame rate is reduced first under pressure).
 - **Encoder factory:** `ScreenH264EncoderFactory: RTCVideoEncoderFactory`.
-  - `supportedCodecs()` returns H.264 **Constrained Baseline `42e034` and High `640c34`
-    (level 5.2)**, with `packetization-mode=1` and `level-asymmetry-allowed=1`. Level
-    5.2 covers the 2560×1600 cap at 30 fps. Safari and VideoToolbox decode both.
-  - `createEncoder` delegates to `RTCVideoEncoderH264` with the negotiated info. The
-    spike showed that this combination encodes 1280×800, 1728×1117, and 2560×1600.
-  - Only H.264 is offered, so negotiation cannot silently pick a software codec.
-- **Track:** one sendonly video transceiver (`trackId = "window"`),
-  `setCodecPreferences` with the H.264 entries of `rtpSenderCapabilities`.
+  - `supportedCodecs()` returns only H.264, with the usual profiles Constrained Baseline
+    `42e01f` and High `640c1f`, `packetization-mode=1`, and `level-asymmetry-allowed=1`.
+    These match what Safari offers, so negotiation succeeds. Offering only H.264 means
+    negotiation cannot silently pick a software codec.
+  - `createEncoder` passes the negotiated info to `RTCVideoEncoderH264` **with the level
+    byte replaced by 5.2** (`42e034` or `640c34`, profile kept). Level 5.2 covers the
+    2560×1600 cap at 30 fps. The spike showed that this encodes and decodes 1280×800,
+    1728×1117, and 2560×1600, which fail at the negotiated level 3.1.
+  - The stream can therefore exceed the level that the phone declared. Apple's hardware
+    decoder handles level 5.2, so Safari is expected to play it; acceptance 1 checks this
+    on the device (see the risks at the end of this section).
+- **Track:** one video track (`trackId = "window"`) on the offer's transceiver, set to
+  `sendonly` (D22), with `setCodecPreferences` to the H.264 entries of
+  `rtpSenderCapabilities`.
   - Sender parameters: `degradationPreference = maintainResolution` (text stays sharp;
     the frame rate drops instead), `maxBitrateBps = 8_000_000`,
     `maxFramerate = 30`.
@@ -832,8 +838,10 @@ auth, the window list, text input (D10), permissions (D16), and later-slice feat
      `{iceServers: [], bundlePolicy: "max-bundle"}` and a `recvonly` video transceiver.
   2. It creates the two data channels (below), creates an offer, applies it locally,
      and sends `rtc.offer`.
-  3. The server creates its peer connection, attaches the track (D21), applies the offer,
-     answers, and sends `rtc.answer`.
+  3. The server creates its peer connection and applies the offer. It then takes the
+     offer's video transceiver, sets its direction to `sendonly`, attaches the track
+     (D21) with `sender.track`, applies the H.264 codec preferences, answers, and sends
+     `rtc.answer`.
   4. Both sides trickle ICE candidates with `rtc.ice` as they are gathered. An end of
      candidates is sent as `rtc.ice` with `candidate: null`.
   5. When the client's `connectionState` becomes `connected`, the client sends
@@ -1009,7 +1017,7 @@ Data channel `motion`, client → server:
 ```
 Data channel `control`, client → server:
 ```jsonc
-{"t":"click"}                       // left click at cursor (or releases a drag lock: the client sends drag end instead)
+{"t":"click"}                       // left click at cursor; while a drag lock is held the client sends drag end instead
 {"t":"rightClick"}
 {"t":"drag","state":"start|end"}
 {"t":"text","text":"こんにちは"}
@@ -1096,8 +1104,10 @@ Wi-Fi off**.
   devices, and no port forwarding is needed.
 
 ### Revision 2 risks (to be checked on the device)
-- **Safari H.264 profile:** Safari on iOS accepts both offered profiles in practice, but
-  the answer's chosen `profile-level-id` must be checked on the device (acceptance 1).
+- **H.264 level above the declared one (D21):** the encoder sends level 5.2 while
+  Safari declares 3.1. If Safari refuses to decode it, the fallback in design is to cap
+  the output at the largest size that level 4.2 allows in the SDP and negotiate that
+  instead; this needs a design update, not a silent change.
 - **Tailnet UDP path:** when Tailscale cannot make a direct path, traffic goes through
   DERP relays, which carry UDP-in-TCP and add latency. That is Tailscale's behavior, not
   something the app controls; the acceptance run on cellular shows the real result.
