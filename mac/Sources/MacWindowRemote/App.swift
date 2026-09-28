@@ -55,12 +55,13 @@ final class AppState: ObservableObject {
     }
 
     func launch() {
-        secret = PairingSecret.loadOrCreate()
-        let backend = MacBackend(onViewing: { _ in })
-        hub = SessionHub(secret: secret, backend: backend, onStatus: { status in
-            Task { @MainActor in AppState.shared.connection = status }
-        })
-        startServer()
+        // Reading the Keychain can wait on a macOS "allow access" prompt (after an ad-hoc
+        // rebuild), so it runs off the main thread; the server starts once the secret is known.
+        serverError = "Waiting for Keychain access…"
+        Task.detached {
+            let secret = PairingSecret.loadOrCreate()
+            await MainActor.run { AppState.shared.secretLoaded(secret) }
+        }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in AppState.shared.refreshPermissions() }
         }
@@ -69,6 +70,15 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(true, forKey: firstLaunchKey)
             showSetup()
         }
+    }
+
+    func secretLoaded(_ loaded: String) {
+        secret = loaded
+        let backend = MacBackend(onViewing: { _ in })
+        hub = SessionHub(secret: loaded, backend: backend, onStatus: { status in
+            Task { @MainActor in AppState.shared.connection = status }
+        })
+        startServer()
     }
 
     func refreshPermissions() {
@@ -97,6 +107,7 @@ final class AppState: ObservableObject {
     }
 
     func resetPairing() {
+        guard hub != nil else { return }
         let alert = NSAlert()
         alert.messageText = "Reset pairing?"
         alert.informativeText = "Paired iPhones are disconnected and must pair again with the new code."
