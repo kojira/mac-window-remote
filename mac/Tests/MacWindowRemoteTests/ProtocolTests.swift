@@ -3,27 +3,6 @@ import Testing
 @testable import MacWindowRemote
 
 @Suite struct ProtocolTests {
-    @Test func binaryFramingRoundTrip() throws {
-        let header = FrameHeader(
-            frameId: 57, windowId: 1234, width: 2560, height: 1600,
-            content: Rect(x: 0, y: 0, w: 2560, h: 1600), window: Rect(x: 100, y: 80, w: 1280, h: 800))
-        let headerData = try JSONEncoder().encode(header)
-        let payload = Data([0xFF, 0xD8, 0x00, 0x01, 0xFF, 0xD9])
-        let message = BinaryFraming.encode(header: headerData, payload: payload)
-        #expect(Array(message.prefix(4)) == [0, 0, UInt8(headerData.count >> 8), UInt8(headerData.count & 0xFF)])
-        let decoded = try BinaryFraming.decode(message)
-        #expect(try JSONDecoder().decode(FrameHeader.self, from: decoded.header) == header)
-        #expect(decoded.payload == payload)
-        // Works on a slice whose indices do not start at 0.
-        let sliced = (Data([9, 9]) + message).dropFirst(2)
-        #expect(try BinaryFraming.decode(sliced).payload == payload)
-    }
-
-    @Test func binaryFramingRejectsTruncated() {
-        #expect(throws: ProtocolError.malformed) { try BinaryFraming.decode(Data([0, 0])) }
-        #expect(throws: ProtocolError.malformed) { try BinaryFraming.decode(Data([0, 0, 0, 10, 1, 2])) }
-    }
-
     func decode(_ json: String) throws -> ClientMessage {
         try ClientMessage.decode(Data(json.utf8))
     }
@@ -31,7 +10,6 @@ import Testing
     @Test func decodesMessages() throws {
         #expect(try decode(#"{"t":"windows.list"}"#) == .windowsList)
         #expect(try decode(#"{"t":"view.start","windowId":1234}"#) == .viewStart(windowId: 1234))
-        #expect(try decode(#"{"t":"frame.ack","frameId":57}"#) == .frameAck(frameId: 57))
         #expect(try decode(#"{"t":"text","text":"日本語"}"#) == .text("日本語"))
         #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace"))
     }
@@ -70,10 +48,55 @@ import Testing
         #expect(throws: (any Error).self) { try decode(#"{"t":"scroll","du":1e400,"dv":0}"#) }
     }
 
-    @Test func motionMessagesAreRecognizedForSilentDrop() {
-        #expect(ClientMessage.isMotion(Data(#"{"t":"move","seq":1,"dx":9,"dy":0}"#.utf8)))
-        #expect(ClientMessage.isMotion(Data(#"{"t":"scroll"}"#.utf8)))
-        #expect(!ClientMessage.isMotion(Data(#"{"t":"click"}"#.utf8)))
-        #expect(!ClientMessage.isMotion(Data("junk".utf8)))
+    /// D22/D28 signaling on the WebSocket.
+    @Test func decodesSignaling() throws {
+        #expect(try decode(#"{"t":"rtc.offer","pc":1,"sdp":"v=0"}"#) == .rtcOffer(pc: 1, sdp: "v=0"))
+        #expect(try decode(#"{"t":"rtc.ice","pc":2,"candidate":"candidate:1 1 udp 1 host 9 typ host","sdpMid":"0","sdpMLineIndex":0}"#)
+                == .rtcIce(pc: 2, candidate: RemoteCandidate(sdp: "candidate:1 1 udp 1 host 9 typ host", sdpMid: "0", sdpMLineIndex: 0)))
+        #expect(try decode(#"{"t":"rtc.ice","pc":2,"candidate":null}"#) == .rtcIce(pc: 2, candidate: nil))
+        #expect(throws: ProtocolError.invalidValue("sdp")) { try decode(#"{"t":"rtc.offer","pc":1}"#) }
+        #expect(throws: ProtocolError.invalidValue("pc")) { try decode(#"{"t":"rtc.offer","sdp":"v=0"}"#) }
+        #expect(throws: ProtocolError.invalidValue("pc")) { try decode(#"{"t":"rtc.ice","pc":-1,"candidate":null}"#) }
+        #expect(throws: ProtocolError.unknownType("frame.ack")) { try decode(#"{"t":"frame.ack","frameId":57}"#) }
+    }
+
+    /// D22: each message type is accepted only on the channel that carries it.
+    @Test func messagesAreAcceptedOnlyOnTheirChannel() throws {
+        func on(_ channel: MessageChannel, _ json: String) throws -> ClientMessage {
+            try ClientMessage.decode(Data(json.utf8), on: channel)
+        }
+        #expect(try on(.motion, #"{"t":"move","seq":1,"dx":0.1,"dy":0}"#) == .move(seq: 1, dx: 0.1, dy: 0))
+        #expect(try on(.motion, #"{"t":"scroll","du":0,"dv":0.1}"#) == .scroll(du: 0, dv: 0.1))
+        #expect(try on(.control, #"{"t":"click"}"#) == .click)
+        #expect(try on(.control, #"{"t":"text","text":"a"}"#) == .text("a"))
+        #expect(try on(.socket, #"{"t":"view.start","windowId":3}"#) == .viewStart(windowId: 3))
+        #expect(throws: ProtocolError.wrongChannel("click")) { try on(.socket, #"{"t":"click"}"#) }
+        #expect(throws: ProtocolError.wrongChannel("move")) { try on(.control, #"{"t":"move","seq":1,"dx":0,"dy":0}"#) }
+        #expect(throws: ProtocolError.wrongChannel("click")) { try on(.motion, #"{"t":"click"}"#) }
+        #expect(throws: ProtocolError.wrongChannel("rtc.offer")) { try on(.control, #"{"t":"rtc.offer","pc":1,"sdp":"v=0"}"#) }
+        #expect(throws: ProtocolError.wrongChannel("windows.list")) { try on(.control, #"{"t":"windows.list"}"#) }
+    }
+
+    @Test func encodesLocalCandidates() throws {
+        func object(_ m: ServerMessage) throws -> [String: Any] {
+            try JSONSerialization.jsonObject(with: Data(m.jsonString().utf8)) as! [String: Any]
+        }
+        let c = try object(.rtcIce(pc: 3, candidate: LocalCandidate(sdp: "candidate:x", sdpMid: "0", sdpMLineIndex: 0)))
+        #expect(c["t"] as? String == "rtc.ice")
+        #expect(c["pc"] as? Int == 3)
+        #expect(c["candidate"] as? String == "candidate:x")
+        #expect(c["sdpMid"] as? String == "0")
+        #expect(c["sdpMLineIndex"] as? Int == 0)
+        let end = try object(.rtcIce(pc: 3, candidate: nil))
+        #expect(end["candidate"] is NSNull)
+        let answer = try object(.rtcAnswer(pc: 3, sdp: "v=0"))
+        #expect(answer["t"] as? String == "rtc.answer" && answer["sdp"] as? String == "v=0")
+    }
+
+    /// D21: the encoder runs at level 5.2 with the negotiated profile.
+    @Test func encoderLevelIsRaisedTo52() {
+        #expect(ScreenH264EncoderFactory.level52("42e01f") == "42e034")
+        #expect(ScreenH264EncoderFactory.level52("640c1f") == "640c34")
+        #expect(ScreenH264EncoderFactory.level52("42e0") == "42e0")
     }
 }

@@ -1,16 +1,20 @@
 import AppKit
 import ScreenCaptureKit
 
-/// The real `SessionBackend`: ScreenCaptureKit, AX focus, CGEvent input.
+/// The real `SessionBackend`: ScreenCaptureKit, WebRTC, AX focus, CGEvent input.
 final class MacBackend: SessionBackend, @unchecked Sendable {
+    private let rtc: RTCHost
     private let onViewing: @Sendable (WindowItem?) -> Void
     private let lock = NSLock()
     private var viewing: WindowItem?
     private let displayAssertion = DisplayAssertion()
 
-    init(onViewing: @escaping @Sendable (WindowItem?) -> Void) {
+    init(rtc: RTCHost, onViewing: @escaping @Sendable (WindowItem?) -> Void) {
+        self.rtc = rtc
         self.onViewing = onViewing
     }
+
+    func makePeer() -> RTCPeer? { rtc.makePeer() }
 
     func permissions() -> PermissionsStatus { Permissions.status }
 
@@ -25,7 +29,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             return .unavailable(reason: Permissions.screenRecording ? "stream_stopped" : "permission_screen_recording")
         }
         guard let window = windows.first(where: { $0.windowID == windowId }) else { return .windowGone }
-        let capture = CaptureSession(window: window, events: events)
+        let capture = CaptureSession(window: window, capturer: rtc.capturer, events: events)
         do {
             try await capture.start()
         } catch {

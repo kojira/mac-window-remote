@@ -20,10 +20,12 @@ protocol SessionBackend: Sendable {
     func releaseButton() async
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
+    /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
+    /// unavailable.
+    func makePeer() -> RTCPeer?
 }
 
 enum CaptureEvent: Sendable {
-    case frame(FrameHeader, Data)
     case windowGone
     case streamStopped
 }
@@ -35,7 +37,6 @@ enum CaptureStart {
 }
 
 protocol CaptureHandle: AnyObject, Sendable {
-    func ack(frameId: Int)
     func stop()
 }
 
@@ -130,6 +131,11 @@ actor Session {
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
 
+    // WebRTC (D22, D27): the one peer connection, numbered by the client.
+    private var peer: RTCPeer?
+    private var peerNumber: Int?
+    private var peerTask: Task<Void, Never>?
+
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
 
@@ -144,7 +150,7 @@ actor Session {
         input = InputPipeline(
             backend: backend,
             onError: { code in await ref.session?.reportInputError(code) },
-            onCursor: { cursor, seq in await ref.session?.send(.cursor(u: cursor.u, v: cursor.v, seq: seq)) })
+            onCursor: { cursor, seq in await ref.session?.sendControl(.cursor(u: cursor.u, v: cursor.v, seq: seq)) })
         ref.session = self
     }
 
@@ -156,12 +162,8 @@ actor Session {
             guard let message else { break }
             switch message {
             case .text(let text):
-                let data = Data(text.utf8)
                 do {
-                    await handle(try ClientMessage.decode(data))
-                } catch where ClientMessage.isMotion(data) {
-                    // Invalid motion is dropped silently (D28).
-                    log.debug("motion dropped: \(String(describing: error), privacy: .public)")
+                    await handle(try ClientMessage.decode(Data(text.utf8), on: .socket))
                 } catch {
                     log.info("bad request: \(String(describing: error), privacy: .public)")
                     await send(.error(code: .badRequest, message: "Bad request"))
@@ -190,7 +192,21 @@ actor Session {
         case .windowNotFound: message = "Window not found"
         default: message = "Input failed"
         }
-        await send(.error(code: code, message: message))
+        await sendControl(.error(code: code, message: message))
+    }
+
+    /// A message from a data channel (D22). Invalid `motion` messages are dropped silently;
+    /// invalid `control` messages get `bad_request` on `control` (D28).
+    private func dataChannelMessage(_ channel: MessageChannel, _ data: Data) async {
+        do {
+            let message = try ClientMessage.decode(data, on: channel)
+            await handle(message)
+        } catch where channel == .motion {
+            log.debug("motion dropped: \(String(describing: error), privacy: .public)")
+        } catch {
+            log.info("bad request on control: \(String(describing: error), privacy: .public)")
+            await sendControl(.error(code: .badRequest, message: "Bad request"))
+        }
     }
 
     func handle(_ message: ClientMessage) async {
@@ -214,8 +230,12 @@ actor Session {
             if let id = viewingWindowId { await send(.viewState(windowId: id, state: .stopped, reason: nil)) }
             viewingWindowId = nil
             await input.setTarget(nil)
-        case .frameAck(let frameId):
-            capture?.ack(frameId: frameId)
+        case .rtcOffer(let pc, let sdp):
+            await answer(pc: pc, sdp: sdp)
+        case .rtcIce(let pc, let candidate):
+            guard pc == peerNumber, let peer else { return }
+            // The end of candidates needs no action on the answering side.
+            if let candidate { await peer.add(candidate) }
         case .move(let seq, let dx, let dy):
             await input.submitMove(seq: seq, dx: dx, dy: dy)
         case .scroll(let du, let dv):
@@ -231,6 +251,65 @@ actor Session {
         case .key(let name):
             await input.submit(.key(name))
         }
+    }
+
+    // MARK: WebRTC (D22, D27)
+
+    /// Answers `rtc.offer`. A new `pc` replaces the current peer connection; the same `pc`
+    /// renegotiates it (an ICE restart).
+    private func answer(pc: Int, sdp: String) async {
+        if pc != peerNumber || peer == nil {
+            closePeer()
+            guard let created = backend.makePeer() else {
+                await send(.error(code: .rtcFailed, message: "WebRTC is unavailable"))
+                return
+            }
+            peer = created
+            peerNumber = pc
+            peerTask = Task { [weak self] in
+                for await event in created.events {
+                    await self?.peerEvent(event, pc: pc)
+                }
+            }
+            log.info("peer connection created pc=\(pc, privacy: .public)")
+        }
+        guard let peer else { return }
+        do {
+            let answer = try await peer.answer(offer: sdp)
+            guard pc == peerNumber, !closed else { return }
+            await send(.rtcAnswer(pc: pc, sdp: answer))
+        } catch {
+            log.error("answer failed pc=\(pc, privacy: .public): \(String(describing: error), privacy: .public)")
+            if pc == peerNumber { closePeer() }
+            await send(.error(code: .rtcFailed, message: "Could not answer the video offer"))
+        }
+    }
+
+    private func peerEvent(_ event: RTCPeer.Event, pc: Int) async {
+        guard pc == peerNumber, !closed else { return }
+        switch event {
+        case .localCandidate(let candidate):
+            await send(.rtcIce(pc: pc, candidate: candidate))
+        case .connectionState(let state):
+            // A failed or closed peer connection stops capture and releases a held button and
+            // the display assertion (D27). The client starts a fresh one and resumes viewing.
+            if state == .failed || state == .closed {
+                closePeer()
+                stopViewing()
+                viewingWindowId = nil
+                await input.setTarget(nil)
+            }
+        case .message(let channel, let data):
+            await dataChannelMessage(channel, data)
+        }
+    }
+
+    private func closePeer() {
+        peerTask?.cancel()
+        peerTask = nil
+        peer?.close()
+        peer = nil
+        peerNumber = nil
     }
 
     // MARK: Capture
@@ -273,8 +352,6 @@ actor Session {
     private func captureEvent(_ event: CaptureEvent, windowId: UInt32) async {
         guard viewingWindowId == windowId, !closed else { return }
         switch event {
-        case .frame(let header, let jpeg):
-            await sendFrame(header, jpeg)
         case .windowGone:
             stopViewing()
             viewingWindowId = nil
@@ -320,11 +397,10 @@ actor Session {
         try? await outbound.write(.text(message.jsonString()))
     }
 
-    private func sendFrame(_ header: FrameHeader, _ jpeg: Data) async {
-        guard !closed, let headerData = try? JSONEncoder().encode(header) else { return }
-        let message = BinaryFraming.encode(header: headerData, payload: jpeg)
-        log.debug("frame sent id=\(header.frameId, privacy: .public) window=\(header.windowId, privacy: .public) bytes=\(message.count, privacy: .public)")
-        try? await outbound.write(.binary(ByteBuffer(bytes: message)))
+    /// Input results travel on the `control` data channel (D22).
+    func sendControl(_ message: ServerMessage) async {
+        guard !closed, let peer else { return }
+        peer.sendControl(message.jsonString())
     }
 
     func close(code: UInt16, reason: String) async {
@@ -339,6 +415,8 @@ actor Session {
         stopViewing()
         viewingWindowId = nil
         pingTask?.cancel()
+        // Replacing or ending the session also closes its peer connection (D22).
+        closePeer()
         await input.shutdown()
     }
 }

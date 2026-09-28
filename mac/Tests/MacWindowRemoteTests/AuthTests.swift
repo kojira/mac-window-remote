@@ -20,6 +20,7 @@ private final class FakeBackend: SessionBackend {
     func focus(windowId: UInt32) async {}
     func releaseButton() async {}
     func viewingChanged(_ window: WindowItem?) {}
+    func makePeer() -> RTCPeer? { nil }
 }
 
 /// The Tailscale identity check through the real server (D32): only the owner's
