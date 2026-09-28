@@ -46,6 +46,8 @@ struct InputJob: Sendable {
     /// Window frame (points) from the header of the frame the user saw (D7).
     let frameWindow: Rect?
     let kind: Kind
+    /// When the message arrived, to log queueing plus posting latency.
+    var received = ContinuousClock.now
 }
 
 /// Connection state shown in the menu bar.
@@ -185,6 +187,7 @@ actor Session {
                 do {
                     await handle(try ClientMessage.decode(Data(text.utf8)))
                 } catch {
+                    log.info("bad request: \(String(describing: error), privacy: .public)")
                     await send(.error(code: .badRequest, message: "Bad request"))
                 }
             case .binary:
@@ -260,8 +263,13 @@ actor Session {
     }
 
     private func enqueueInput(_ kind: InputJob.Kind, frameId: Int?) {
-        guard let windowId = viewingWindowId else { return }
-        let header = frameId.flatMap { id in recentFrames.last { $0.frameId == id } } ?? recentFrames.last
+        guard let windowId = viewingWindowId else {
+            log.info("input dropped kind=\(kind.logName, privacy: .public) reason=not_viewing")
+            return
+        }
+        let seen = frameId.flatMap { id in recentFrames.last { $0.frameId == id } }
+        let header = seen ?? recentFrames.last
+        log.debug("input received kind=\(kind.logName, privacy: .public) frameMatched=\(seen != nil, privacy: .public) hasFrame=\(header != nil, privacy: .public)")
         inputContinuation.yield(InputJob(windowId: windowId, frameWindow: header?.window, kind: kind))
     }
 

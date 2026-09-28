@@ -51,8 +51,14 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     }
 
     func perform(_ job: InputJob) async -> ErrorCode? {
-        guard Permissions.accessibility else { return .permissionAccessibility }
+        let started = ContinuousClock.now
+        let kind = job.kind.logName
+        guard Permissions.accessibility else {
+            log.info("input rejected kind=\(kind, privacy: .public) reason=permission_accessibility")
+            return .permissionAccessibility
+        }
         guard let bounds = WindowCatalog.currentBounds(job.windowId), let pid = pid(for: job.windowId) else {
+            log.info("input rejected kind=\(kind, privacy: .public) reason=window_not_found")
             return .windowNotFound
         }
         // Resolve the target point before focusing, so a stale tap clicks nothing.
@@ -61,12 +67,19 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         case .pointer(_, let u, let v), .scroll(let u, let v, _, _):
             guard let frameWindow = job.frameWindow,
                   let p = CoordinateMapper.globalPoint(u: u, v: v, frameWindow: frameWindow, currentBounds: bounds)
-            else { return .staleCoordinates }
+            else {
+                log.info("input rejected kind=\(kind, privacy: .public) reason=stale_coordinates hasFrame=\(job.frameWindow != nil, privacy: .public)")
+                return .staleCoordinates
+            }
             point = p
+            // Window-relative points only.
+            log.debug("input mapped kind=\(kind, privacy: .public) rel=(\(Int(p.x - bounds.minX), privacy: .public),\(Int(p.y - bounds.minY), privacy: .public)) window=\(Int(bounds.width), privacy: .public)x\(Int(bounds.height), privacy: .public)")
         case .text, .key:
             break
         }
-        await WindowFocuser.focus(windowId: job.windowId, pid: pid, bounds: bounds)
+        let focusStarted = ContinuousClock.now
+        let focus = await WindowFocuser.focus(windowId: job.windowId, pid: pid, bounds: bounds)
+        let focusTime = ContinuousClock.now - focusStarted
         switch job.kind {
         case .pointer(let action, _, _):
             await InputInjector.click(at: point!, count: action == .doubleClick ? 2 : 1)
@@ -78,6 +91,27 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         case .key(let name):
             await InputInjector.key(name)
         }
+        let total = ContinuousClock.now - started
+        log.info("input posted kind=\(kind, privacy: .public) focus=\(focus.rawValue, privacy: .public) focusMs=\(focusTime.milliseconds, privacy: .public) performMs=\(total.milliseconds, privacy: .public) sinceReceiptMs=\((ContinuousClock.now - job.received).milliseconds, privacy: .public)")
         return nil
+    }
+}
+
+extension InputJob.Kind {
+    /// Log label; never includes typed text.
+    var logName: String {
+        switch self {
+        case .pointer(let action, _, _): return "pointer.\(action.rawValue)"
+        case .scroll: return "scroll"
+        case .text: return "text"
+        case .key: return "key"
+        }
+    }
+}
+
+extension Duration {
+    var milliseconds: Int {
+        let c = components
+        return Int(c.seconds * 1000 + c.attoseconds / 1_000_000_000_000_000)
     }
 }
