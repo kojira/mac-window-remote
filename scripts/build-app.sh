@@ -11,13 +11,20 @@ APP="$ROOT/build/MacWindowRemote.app"
 # `swift` happens to be first in PATH.
 cd "$ROOT/mac"
 xcrun swift build -c release
-BIN="$(xcrun swift build -c release --show-bin-path)/MacWindowRemote"
+BIN_DIR="$(xcrun swift build -c release --show-bin-path)"
+# The license shipped inside the WebRTC xcframework (D20).
+WEBRTC_LICENSE="$ROOT/mac/.build/artifacts/webrtc/WebRTC/WebRTC.xcframework/LICENSE"
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/MacWindowRemote"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
+cp "$BIN_DIR/MacWindowRemote" "$APP/Contents/MacOS/MacWindowRemote"
 cp "$ROOT/mac/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp -R "$ROOT/web" "$APP/Contents/Resources/web"
+# WebRTC.framework is loaded from @executable_path/../Frameworks (rpath in Package.swift).
+cp -R "$BIN_DIR/WebRTC.framework" "$APP/Contents/Frameworks/WebRTC.framework"
+cp "$WEBRTC_LICENSE" "$APP/Contents/Resources/WebRTC-LICENSE"
 
+# Sign inside out: the embedded framework first, then the app.
+codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP/Contents/Frameworks/WebRTC.framework"
 codesign --force --sign "${CODESIGN_IDENTITY:--}" "$APP"
 echo "Built $APP"
