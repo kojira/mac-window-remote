@@ -1,8 +1,10 @@
 import Foundation
+import HTTPTypes
 import Hummingbird
 import HummingbirdTesting
 import HummingbirdWSTesting
 import HummingbirdWebSocket
+import WSClient
 import Testing
 @testable import MacWindowRemote
 
@@ -20,53 +22,63 @@ private final class FakeBackend: SessionBackend {
     func viewingChanged(_ window: WindowItem?) {}
 }
 
-/// The /ws handshake through the real server (D6): wrong, late, or non-auth first messages
-/// close the socket; the right secret gets `hello` and can use the session.
+/// The Tailscale identity check through the real server (D32): only the owner's
+/// `Tailscale-User-Login` gets the page and a session; others get 403 or close 4001.
 @Suite(.serialized) struct AuthTests {
-    static let secret = PairingSecret.generate()
+    static let owner = "owner@example.com"
+    static let header = HTTPField.Name(TailscaleIdentity.loginHeader)!
 
-    func withServer(_ body: @escaping @Sendable (any TestClientProtocol, SessionHub) async throws -> Void) async throws {
-        let hub = SessionHub(secret: Self.secret, backend: FakeBackend(), authTimeout: .milliseconds(300))
+    func withServer(_ body: @escaping @Sendable (any TestClientProtocol) async throws -> Void) async throws {
+        let hub = SessionHub(owner: OwnerLogin(override: { "" }, query: { Self.owner }), backend: FakeBackend())
         let app = Server.makeApplication(port: 0, webRoot: nil, hub: hub)
-        try await app.test(.live) { client in try await body(client, hub) }
+        try await app.test(.live) { client in try await body(client) }
     }
 
-    @Test func wrongSecretClosesWith4001() async throws {
-        try await withServer { client, _ in
-            let close = try await client.ws("/ws") { inbound, outbound, _ in
-                try await outbound.write(.text(#"{"t":"auth","secret":"wrong"}"#))
+    func headers(_ login: String?) -> WebSocketClientConfiguration {
+        var fields = HTTPFields()
+        if let login { fields[Self.header] = login }
+        return WebSocketClientConfiguration(additionalHeaders: fields)
+    }
+
+    @Test func httpWithoutOwnerLoginIs403() async throws {
+        try await withServer { client in
+            try await client.execute(uri: "/", method: .get) { response in
+                #expect(response.status == .forbidden)
+                #expect(String(buffer: response.body).contains("Not allowed: sign in to Tailscale as the Mac owner"))
+            }
+            try await client.execute(uri: "/", method: .get, headers: [Self.header: "someone@example.com"]) { response in
+                #expect(response.status == .forbidden)
+            }
+            // The owner passes the check; with no web root, the router answers 404.
+            try await client.execute(uri: "/", method: .get, headers: [Self.header: Self.owner]) { response in
+                #expect(response.status == .notFound)
+            }
+        }
+    }
+
+    @Test func wsWithoutLoginClosesWith4001() async throws {
+        try await withServer { client in
+            let close = try await client.ws("/ws", configuration: headers(nil)) { inbound, _, _ in
                 for try await _ in inbound {}
             }
             #expect(close?.closeCode == .unknown(4001))
         }
     }
 
-    @Test func missingAuthTimesOutWith4003() async throws {
-        try await withServer { client, _ in
-            let close = try await client.ws("/ws") { inbound, _, _ in
+    @Test func wsWithAnotherLoginClosesWith4001() async throws {
+        try await withServer { client in
+            let close = try await client.ws("/ws", configuration: headers("someone@example.com")) { inbound, _, _ in
                 for try await _ in inbound {}
             }
-            #expect(close?.closeCode == .unknown(4003))
+            #expect(close?.closeCode == .unknown(4001))
         }
     }
 
-    @Test func nonAuthFirstMessageClosesWith4003() async throws {
-        try await withServer { client, _ in
-            let close = try await client.ws("/ws") { inbound, outbound, _ in
-                try await outbound.write(.text(#"{"t":"windows.list"}"#))
-                for try await _ in inbound {}
-            }
-            #expect(close?.closeCode == .unknown(4003))
-        }
-    }
-
-    @Test func rightSecretGetsHelloAndWindows() async throws {
-        try await withServer { client, _ in
-            try await client.ws("/ws") { inbound, outbound, _ in
-                try await outbound.write(.text(#"{"t":"auth","secret":"\#(Self.secret)","client":"test"}"#))
+    @Test func ownerGetsHelloAndWindows() async throws {
+        try await withServer { client in
+            try await client.ws("/ws", configuration: headers("Owner@Example.com")) { inbound, outbound, _ in
                 var it = inbound.messages(maxSize: 1 << 20).makeAsyncIterator()
-                let hello = try await it.next()
-                guard case .text(let h)? = hello else { Issue.record("no hello"); return }
+                guard case .text(let h)? = try await it.next() else { Issue.record("no hello"); return }
                 #expect(h.contains(#""t":"hello""#))
                 #expect(h.contains(#""accessibility":false"#))
                 try await outbound.write(.text(#"{"t":"windows.list"}"#))
@@ -75,19 +87,6 @@ private final class FakeBackend: SessionBackend {
                 #expect(w.contains(#""app":"Editor""#))
                 try await outbound.close(.normalClosure, reason: nil)
             }
-        }
-    }
-
-    @Test func resetPairingClosesOpenSessionWith4001() async throws {
-        try await withServer { client, hub in
-            let close = try await client.ws("/ws") { inbound, outbound, _ in
-                try await outbound.write(.text(#"{"t":"auth","secret":"\#(Self.secret)"}"#))
-                var it = inbound.messages(maxSize: 1 << 20).makeAsyncIterator()
-                _ = try await it.next() // hello
-                await hub.resetSecret(PairingSecret.generate())
-                while try await it.next() != nil {}
-            }
-            #expect(close?.closeCode == .unknown(4001))
         }
     }
 }

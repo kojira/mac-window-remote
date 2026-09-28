@@ -14,14 +14,11 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-  <section id="pair" class="screen" hidden>
-    <h1>Pair with your Mac</h1>
-    <p>Scan the QR in the Mac menu bar → <b>Pair iPhone…</b>, or paste the pairing code.</p>
-    <p id="pair-error" class="error" hidden></p>
-    <form id="pair-form">
-      <input id="pair-code" type="text" placeholder="Pairing code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <button type="submit">Pair</button>
-    </form>
+  <section id="denied" class="screen" hidden>
+    <h1>Not allowed</h1>
+    <p class="error">Not allowed: sign in to Tailscale as the Mac owner.</p>
+    <p>This iPhone must use Tailscale with the same account as the Mac. The allowed account is shown in the Mac menu bar.</p>
+    <button id="denied-retry" type="button">Try again</button>
   </section>
 
   <section id="list" class="screen" hidden>

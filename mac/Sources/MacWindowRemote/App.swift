@@ -32,7 +32,8 @@ final class AppState: ObservableObject {
     @Published private(set) var permissions = Permissions.status
     @Published private(set) var connection: ConnectionStatus = .idle
     @Published private(set) var serverError: String?
-    @Published private(set) var secret = ""
+    /// The login allowed to connect (D32), for the menu; nil while unknown.
+    @Published private(set) var allowedLogin: String?
     /// Set once the user asked for Screen Recording in this run; a grant applies only after relaunch.
     @Published var screenRecordingRequested = false
 
@@ -54,13 +55,15 @@ final class AppState: ObservableObject {
         }
     }
 
+    private let owner = OwnerLogin()
+
     func launch() {
-        do {
-            secretLoaded(try PairingSecretStore.default.loadOrCreate())
-        } catch {
-            log.error("pairing secret unavailable: \(String(describing: error), privacy: .public)")
-            serverError = "Server not running (could not store the pairing secret)"
-        }
+        let backend = MacBackend(onViewing: { _ in })
+        hub = SessionHub(owner: owner, backend: backend, onStatus: { status in
+            Task { @MainActor in AppState.shared.connection = status }
+        })
+        startServer()
+        refreshAllowedLogin()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in AppState.shared.refreshPermissions() }
         }
@@ -71,18 +74,20 @@ final class AppState: ObservableObject {
         }
     }
 
-    func secretLoaded(_ loaded: String) {
-        secret = loaded
-        let backend = MacBackend(onViewing: { _ in })
-        hub = SessionHub(secret: loaded, backend: backend, onStatus: { status in
-            Task { @MainActor in AppState.shared.connection = status }
-        })
-        startServer()
-    }
-
     func refreshPermissions() {
         let now = Permissions.status
         if now != permissions { permissions = now }
+        if allowedLogin == nil { refreshAllowedLogin() }
+    }
+
+    /// Reads the allowed login for the menu. `OwnerLogin` asks the Tailscale CLI at most every
+    /// 30 s while the login is unknown.
+    func refreshAllowedLogin() {
+        let owner = owner
+        Task {
+            let login = await owner.current()
+            if login != allowedLogin { allowedLogin = login }
+        }
     }
 
     func startServer() {
@@ -105,31 +110,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    func resetPairing() {
-        guard hub != nil else { return }
-        let alert = NSAlert()
-        alert.messageText = "Reset pairing?"
-        alert.informativeText = "Paired iPhones are disconnected and must pair again with the new code."
-        alert.addButton(withTitle: "Reset")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do {
-            secret = try PairingSecretStore.default.reset()
-        } catch {
-            log.error("pairing reset failed: \(String(describing: error), privacy: .public)")
-            let failed = NSAlert()
-            failed.messageText = "Could not reset pairing"
-            failed.informativeText = "The new pairing secret could not be saved. The current pairing still works."
-            failed.runModal()
-            return
-        }
-        let newSecret = secret
-        Task { await hub?.resetSecret(newSecret) }
-    }
-
     func showSetup() { windows.show(.setup) { SetupView(state: self) } }
-    func showPair() { windows.show(.pair) { PairView(state: self) } }
     func showSettings() { windows.show(.settings) { SettingsView(state: self) } }
 }
 
@@ -140,12 +121,11 @@ struct MenuContent: View {
 
     var body: some View {
         Text(state.statusLine)
+        Text(state.allowedLogin.map { "Allowed: \($0)" } ?? "Allowed: unknown (sign in to Tailscale)")
         Divider()
-        Button("Pair iPhone…") { state.showPair() }
         Button("Setup & Permissions…") { state.showSetup() }
         Button("Settings…") { state.showSettings() }
         Divider()
-        Button("Reset pairing…") { state.resetPairing() }
         Button("Quit") { NSApp.terminate(nil) }
     }
 }
@@ -177,7 +157,7 @@ enum MenuBarIcon {
 
 @MainActor
 final class WindowPresenter {
-    enum Kind: String { case setup, pair, settings }
+    enum Kind: String { case setup, settings }
     private var open: [Kind: NSWindow] = [:]
 
     func show<V: View>(_ kind: Kind, @ViewBuilder content: () -> V) {
@@ -189,7 +169,6 @@ final class WindowPresenter {
         let w = NSWindow(contentViewController: NSHostingController(rootView: content()))
         w.title = switch kind {
         case .setup: "Setup & Permissions"
-        case .pair: "Pair iPhone"
         case .settings: "Settings"
         }
         w.styleMask = [.titled, .closable]

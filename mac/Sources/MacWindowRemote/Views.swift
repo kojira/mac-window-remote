@@ -1,5 +1,4 @@
 import AppKit
-import CoreImage.CIFilterBuiltins
 import ServiceManagement
 import SwiftUI
 
@@ -45,12 +44,10 @@ struct SetupView: View {
             Divider()
 
             ServeCommandView()
-            IPhoneURLField()
-
-            HStack {
-                Spacer()
-                Button("Pair iPhone…") { state.showPair() }
-            }
+            Text("Then open the https address that `tailscale serve` prints in Safari on an iPhone signed in to Tailscale as the allowed user.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            AllowedLoginField(state: state)
         }
         .padding(20)
         .frame(width: 520)
@@ -98,75 +95,24 @@ struct ServeCommandView: View {
     }
 }
 
-struct IPhoneURLField: View {
-    @State private var url = AppSettings.iPhoneURL
+/// Who may connect (D32): the Tailscale login this Mac is signed in with, or an override.
+struct AllowedLoginField: View {
+    @ObservedObject var state: AppState
+    @State private var override = AppSettings.allowedLoginOverride
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("iPhone URL (the https address that `tailscale serve` prints):").font(.callout)
-            TextField("https://your-mac.your-tailnet.ts.net", text: $url)
+            Text("Allowed Tailscale login. Only this tailnet user can open the page:").font(.callout)
+            TextField(state.allowedLogin ?? "Sign in to Tailscale on this Mac", text: $override)
                 .textFieldStyle(.roundedBorder)
-                .onChange(of: url) { _, value in AppSettings.iPhoneURL = value }
-        }
-    }
-}
-
-// MARK: - Pair iPhone (DESIGN.md D6)
-
-struct PairView: View {
-    @ObservedObject var state: AppState
-    @State private var iPhoneURL = AppSettings.iPhoneURL
-
-    var body: some View {
-        VStack(spacing: 14) {
-            if let url = AppSettings.pairingURL(secret: state.secret), let qr = QRCode.image(for: url) {
-                Text("Scan with the iPhone camera, then open the link in Safari.")
-                Image(nsImage: qr)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: 240, height: 240)
-            } else {
-                Text("Set the iPhone URL first, so the QR code can point to your Mac.")
-                    .foregroundStyle(.orange)
-                IPhoneURLField()
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Pairing code (paste it on the iPhone, e.g. in a Home Screen web app):").font(.callout)
-                HStack {
-                    Text(state.secret)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer()
-                    Button("Copy") { copyToPasteboard(state.secret) }
+                .onChange(of: override) { _, value in
+                    AppSettings.allowedLoginOverride = value
+                    state.refreshAllowedLogin()
                 }
-            }
-            Text("Anyone with this code can control this Mac through your tailnet. Use Reset pairing in the menu to revoke it.")
+            Text("Leave empty to allow the login this Mac is signed in with.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(20)
-        .frame(width: 420)
-        .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in
-            // Re-render when the iPhone URL is entered in another window.
-            if iPhoneURL != AppSettings.iPhoneURL { iPhoneURL = AppSettings.iPhoneURL }
-        }
-    }
-}
-
-enum QRCode {
-    static func image(for text: String) -> NSImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(text.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)) else { return nil }
-        let rep = NSCIImageRep(ciImage: output)
-        let image = NSImage(size: rep.size)
-        image.addRepresentation(rep)
-        return image
     }
 }
 
@@ -198,7 +144,7 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            IPhoneURLField()
+            AllowedLoginField(state: state)
             Toggle("Launch at login", isOn: $launchAtLogin)
                 .onChange(of: launchAtLogin) { _, on in
                     do {

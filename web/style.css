@@ -9,9 +9,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
   border-radius: 8px; padding: 8px 10px; }
 
 .screen { position: fixed; inset: 0; padding-top: env(safe-area-inset-top); }
-#pair { padding: calc(env(safe-area-inset-top) + 24px) 20px 20px; }
-#pair form { display: flex; gap: 8px; }
-#pair input { flex: 1; min-width: 0; }
+#denied { padding: calc(env(safe-area-inset-top) + 24px) 20px 20px; }
 .error { color: #ff8a80; }
 .message { padding: 16px; color: #bbb; }
 

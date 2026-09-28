@@ -46,24 +46,23 @@ enum ConnectionStatus: Equatable, Sendable {
     case viewing(app: String, title: String)
 }
 
-/// Owns the single active client (D6) and the pairing secret used to authenticate it.
+/// Owns the single active client and the Tailscale identity check that admits it (D32).
 actor SessionHub {
-    private var secret: String
     private var active: Session?
     let backend: any SessionBackend
-    let authTimeout: Duration
+    let owner: OwnerLogin
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
-    init(secret: String, backend: any SessionBackend, authTimeout: Duration = .seconds(5),
+    init(owner: OwnerLogin, backend: any SessionBackend,
          onStatus: @escaping @Sendable (ConnectionStatus) -> Void = { _ in }) {
-        self.secret = secret
+        self.owner = owner
         self.backend = backend
-        self.authTimeout = authTimeout
         self.onStatus = onStatus
     }
 
-    func verify(_ candidate: String) -> Bool {
-        PairingSecret.matches(candidate, secret)
+    /// The identity check for one request (D32). The header value is never logged.
+    func admit(login: String?) async -> TailscaleIdentity.Decision {
+        TailscaleIdentity.check(header: login, owner: await owner.current())
     }
 
     /// Makes `session` the active client, closing the previous one with 4002.
@@ -90,43 +89,21 @@ actor SessionHub {
         if active === session { onStatus(status) }
     }
 
-    /// Reset pairing: new secret, and the open session is closed with 4001.
-    func resetSecret(_ newSecret: String) async {
-        secret = newSecret
-        if let current = active {
-            active = nil
-            onStatus(.idle)
-            await current.close(code: CloseCode.authFailed, reason: "auth_failed")
-            await current.teardown()
-        }
-    }
-
     // MARK: WebSocket handler
 
-    func handle(inbound: WebSocketInboundStream, outbound: WebSocketOutboundWriter) async {
+    /// `login` is the `Tailscale-User-Login` header of the upgrade request. A rejected client
+    /// is closed with 4001 after the upgrade, so the phone can show why (D32).
+    func handle(inbound: WebSocketInboundStream, outbound: WebSocketOutboundWriter, login: String?) async {
+        let decision = await admit(login: login)
+        guard decision == .allowed else {
+            log.info("connection not allowed reason=\(String(describing: decision), privacy: .public)")
+            try? await outbound.close(.unknown(CloseCode.notAllowed), reason: "not_allowed")
+            return
+        }
         var iterator = inbound.messages(maxSize: Server.maxMessageSize).makeAsyncIterator()
-        let timeout = authTimeout
-        let timer = Task {
-            try await Task.sleep(for: timeout)
-            log.info("auth timeout")
-            try? await outbound.close(.unknown(CloseCode.protocolError), reason: "protocol_error")
-        }
-        let first = try? await iterator.next()
-        timer.cancel()
-        guard case .text(let text)? = first,
-              case .auth(let candidate)? = try? ClientMessage.decode(Data(text.utf8))
-        else {
-            try? await outbound.close(.unknown(CloseCode.protocolError), reason: "protocol_error")
-            return
-        }
-        guard verify(candidate) else {
-            log.info("auth failed")
-            try? await outbound.close(.unknown(CloseCode.authFailed), reason: "auth_failed")
-            return
-        }
         let session = Session(hub: self, backend: backend, outbound: outbound)
         await activate(session)
-        log.info("session authenticated")
+        log.info("session started")
         await session.send(.hello(permissions: backend.permissions()))
         await session.run(&iterator)
         await session.teardown()
@@ -218,8 +195,6 @@ actor Session {
 
     func handle(_ message: ClientMessage) async {
         switch message {
-        case .auth:
-            await send(.error(code: .badRequest, message: "Already authenticated"))
         case .windowsList:
             guard backend.permissions().screenRecording else {
                 await send(.error(code: .permissionScreenRecording,

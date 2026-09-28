@@ -29,7 +29,6 @@ import Testing
     }
 
     @Test func decodesMessages() throws {
-        #expect(try decode(#"{"t":"auth","secret":"abc","client":"web/0.1"}"#) == .auth(secret: "abc"))
         #expect(try decode(#"{"t":"windows.list"}"#) == .windowsList)
         #expect(try decode(#"{"t":"view.start","windowId":1234}"#) == .viewStart(windowId: 1234))
         #expect(try decode(#"{"t":"frame.ack","frameId":57}"#) == .frameAck(frameId: 57))

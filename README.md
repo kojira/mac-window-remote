@@ -8,7 +8,7 @@ View and operate **one Mac window at a time** from an iPhone.
 
 ## Status
 
-**Slice 1 (MVP)**: pair → pick a window → view → zoom → click → scroll → type. Clipboard text, image upload, and the key bar are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Slice 1 (MVP)**: open the page → pick a window → view → zoom → click → scroll → type. Clipboard text, image upload, and the key bar are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Honest constraints
 
@@ -48,12 +48,10 @@ Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the ge
 2. Grant **Screen Recording**: click Request or Open Settings, and turn the app on. Then click **Relaunch**.
 3. Grant **Accessibility** the same way.
 4. In Terminal, run the command that Setup shows, once: `tailscale serve --bg http://127.0.0.1:8765`
-5. Enter the `https://…` address that `tailscale serve` prints as the **iPhone URL** in Setup or Settings.
-6. Menu bar → **Pair iPhone…**, and scan the QR code with the iPhone camera. Safari opens the window list.
-   To use it from the Home Screen, choose Share → **Add to Home Screen**, open the icon, and paste the pairing code shown under the QR code.
-7. Keep the Mac unlocked while you use it remotely.
+5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens; there is no pairing step. To use it from the Home Screen, choose Share → **Add to Home Screen**.
+6. Keep the Mac unlocked while you use it remotely.
 
-The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every function needs the pairing secret. **Reset pairing…** in the menu revokes the old secret. The secret is stored in `~/Library/Application Support/mac-window-remote/pairing-secret` (readable only by your user); the app does not use the Keychain. If you used an earlier build that kept the secret in the Keychain, pair the iPhone again once. The old Keychain item "mac-window-remote" is no longer read and can be deleted in Keychain Access.
+The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every request must come from the Tailscale login that owns this Mac: `tailscale serve` sends it in the `Tailscale-User-Login` header, and the app reads the owner from `tailscale status --json`. Other tailnet users, tagged devices, and direct local requests get "Not allowed: sign in to Tailscale as the Mac owner". To allow a different login, set it in Settings → **Allowed Tailscale login**. The app no longer uses a pairing code or the Keychain; an old Keychain item "mac-window-remote" from earlier builds is not read and can be deleted in Keychain Access.
 
 ## License
 

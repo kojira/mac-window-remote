@@ -5,9 +5,9 @@ import Foundation
 // Until the WebRTC data channels exist, the D28 input messages travel on the WebSocket.
 
 enum CloseCode {
-    static let authFailed: UInt16 = 4001
+    /// Not the Mac owner's Tailscale login, or no login (D32).
+    static let notAllowed: UInt16 = 4001
     static let replaced: UInt16 = 4002
-    static let protocolError: UInt16 = 4003
 }
 
 enum ErrorCode: String, Codable {
@@ -30,7 +30,6 @@ struct Rect: Codable, Equatable {
 // MARK: Client → server
 
 enum ClientMessage: Equatable {
-    case auth(secret: String)
     case windowsList
     case viewStart(windowId: UInt32)
     case viewStop
@@ -55,7 +54,6 @@ enum ProtocolError: Error, Equatable {
 extension ClientMessage {
     private struct Envelope: Decodable {
         let t: String
-        let secret: String?
         let windowId: UInt32?
         let frameId: Int?
         let seq: Int?
@@ -87,8 +85,6 @@ extension ClientMessage {
             return x
         }
         switch e.t {
-        case "auth":
-            return .auth(secret: try require(e.secret, "secret"))
         case "windows.list":
             return .windowsList
         case "view.start":

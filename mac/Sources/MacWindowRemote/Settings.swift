@@ -4,7 +4,7 @@ import Foundation
 enum AppSettings {
     static let defaultPort = 8765
     private static let portKey = "port"
-    private static let iPhoneURLKey = "iPhoneURL"
+    private static let allowedLoginKey = "allowedLogin"
 
     static var port: Int {
         get {
@@ -14,18 +14,12 @@ enum AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: portKey) }
     }
 
-    /// Base URL of the page as served by `tailscale serve`, used only to build the pairing QR.
-    static var iPhoneURL: String {
-        get { UserDefaults.standard.string(forKey: iPhoneURLKey) ?? "" }
-        set { UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: iPhoneURLKey) }
+    /// The Tailscale login allowed to connect, when set; otherwise the login this Mac is
+    /// signed in with (D32).
+    static var allowedLoginOverride: String {
+        get { UserDefaults.standard.string(forKey: allowedLoginKey) ?? "" }
+        set { UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: allowedLoginKey) }
     }
 
     static var serveCommand: String { "tailscale serve --bg http://127.0.0.1:\(port)" }
-
-    static func pairingURL(secret: String) -> String? {
-        var base = iPhoneURL
-        guard !base.isEmpty else { return nil }
-        while base.hasSuffix("/") { base.removeLast() }
-        return "\(base)/#pair=\(secret)"
-    }
 }

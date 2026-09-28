@@ -1,6 +1,7 @@
 # mac-window-remote — Design (v0.2)
 
-Status: **slice 1 implemented (JPEG over WebSocket, absolute taps). Revision 2 (§11)
+Status: **§12 (D32, Tailscale identity instead of pairing) approved by the user.
+Slice 1 implemented (JPEG over WebSocket, absolute taps). Revision 2 (§11)
 replaces the transport with WebRTC and the pointer model with trackpad-style input; it
 is approved and not yet implemented.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
@@ -17,7 +18,8 @@ The user experience, end to end:
 1. On the Mac, a menu bar app runs in the background. It needs Screen Recording and
    Accessibility permission, which a person grants once.
 2. On the iPhone, the user opens a Tailscale HTTPS URL in Safari (or from a Home
-   Screen icon). The page is paired with the Mac once, using a QR code or a pairing code.
+   Screen icon). *(§12 D32: no pairing; the iPhone must be signed in to Tailscale as the
+   Mac's owner.)*
 3. The iPhone shows a list of the Mac's visible windows. The user taps one.
 4. The window streams to the phone. The user pinches to zoom, pans with two fingers,
    taps to click, drags with one finger to scroll, and types with the iPhone keyboard.
@@ -95,6 +97,8 @@ The user experience, end to end:
   - `GET /ws`: WebSocket. The first message must be `auth` (D6). **All functionality
     goes over this socket**, including image upload, so only one channel needs
     authentication.
+  - *Amended by §12 D32:* every request, static files included, must carry the owner's
+    `Tailscale-User-Login`; there is no `auth` message.
 
 ### D3. Transport for the MVP: JPEG frames over WebSocket with ack-based flow control
 > *Superseded by §11 D20–D22.* The JPEG pipeline and `frame.ack` are removed once the
@@ -153,20 +157,18 @@ The user experience, end to end:
   the path when the page is opened over plain HTTP.
 - `tailscale serve` exposes the page to every device in the tailnet. The pairing secret
   (D6) is what restricts who can use it.
+- *Amended by §12 D32:* the Mac app runs `tailscale status --json` to learn its owner's
+  login, and the "iPhone URL" setting and pairing QR code are removed. The Tailscale
+  identity header restricts who can use the page.
 
 ### D6. Authentication: a single pairing secret
-- On first launch the Mac app generates **32 random bytes** (the system CSPRNG),
-  encoded as base64url. This is the pairing secret. It is stored in a **file**,
-  `~/Library/Application Support/mac-window-remote/pairing-secret`. The directory is
-  mode 0700 and the file mode 0600. The file is written to a temporary file and renamed
-  over the old one, so a crash never leaves a partial secret. **Reset pairing…** replaces it.
-  The secret is never written to logs. *(Amended: the Keychain was used until then; see
-  "D6 amendment" below.)*
-- **D6 amendment (user requirement): no Keychain.** With the ad-hoc signature (D17), every
-  rebuild is a new code identity, and reading the Keychain item showed a macOS password
-  dialog on each rebuild. The app now uses no Keychain or Security API at all. Nothing is
-  migrated from the old Keychain item; the phone pairs again once. Protection is the
-  file mode: anyone who can read files as the Mac user can already control the Mac (§9).
+> *Superseded by §12 D32.* There is no pairing secret, pairing code, QR code, Keychain
+> item, or secret file any more; the Mac admits only its owner's Tailscale login. The
+> text below records the slice 1 design.
+- On first launch the Mac app generates **32 random bytes** (`SecRandomCopyBytes`),
+  encoded as base64url. This is the pairing secret. It is stored in the **Keychain**
+  (generic password, service `mac-window-remote`). It is never written to logs.
+  *(A short-lived amendment moved it to an owner-only file before D32 removed it.)*
 - **Pair iPhone… window (menu bar):**
   - A QR code of `<iPhone URL>/#pair=<secret>`.
   - The same secret as a copyable "pairing code".
@@ -391,7 +393,7 @@ A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom a
     - "Open Settings" opens `…?Privacy_Accessibility`.
     - Status is re-polled every 2 s while the window is open.
   - The same window shows the `tailscale serve` command, the iPhone URL field, and a
-    link to Pair.
+    link to Pair. *(§12 D32: the allowed login field replaces the iPhone URL and Pair.)*
 - **Web client:** `hello.permissions` reports both permissions.
   - Missing screen recording: the window list is replaced by "Screen Recording permission
     is missing on the Mac. Open the Mac menu bar app → Setup."
@@ -464,7 +466,8 @@ Unpaired ──code/QR──▶ Connecting ──hello──▶ WindowList ─�
 - **Icon:** SF Symbol `rectangle.on.rectangle`. It is filled while a client is viewing,
   so a person at the Mac can see that the screen is being watched. It shows a warning
   badge while a permission is missing.
-- **Menu:**
+- **Menu:** *(§12 D32 removes Pair iPhone… and Reset pairing…, adds "Allowed: <login>",
+  and replaces the iPhone URL setting with the allowed login override.)*
   - Status line: "Idle", "Connected", "Viewing: <App> — <Title>", or "Permissions
     needed"
   - Pair iPhone…
@@ -481,6 +484,7 @@ Unpaired ──code/QR──▶ Connecting ──hello──▶ WindowList ─�
 
 1. **Pair.** "Scan the QR in the Mac menu bar → Pair iPhone…, or paste the pairing code."
    It has a code field and a **Pair** button, and appears only when no secret is stored.
+   *(Replaced by §12 D32: a **Not allowed** screen, shown on close 4001.)*
 2. **Windows.**
    - A top bar with the title "Windows", a connection dot, and a Refresh button.
    - Pull-to-refresh is not required.
@@ -545,7 +549,8 @@ Server → client:
 {"t":"ping"}
 ```
 Close codes: `4001` auth_failed, `4002` replaced, `4003` protocol_error (first message not
-auth, or auth timeout).
+auth, or auth timeout). *(§12 D32: there is no `auth` message; `4001` is `not_allowed`,
+and `4003` is no longer used.)*
 
 Error codes: `bad_request`, `too_large`, `unsupported_type`, `window_not_found`,
 `stale_coordinates`, `permission_screen_recording`, `permission_accessibility`,
@@ -569,7 +574,7 @@ Unknown key names are rejected with `bad_request`.
 |---|---|
 | `App.swift` | `@main`, `MenuBarExtra`, windows for Pair / Setup / Settings |
 | `Settings.swift` | UserDefaults (port, iPhone URL), `SMAppService` toggle |
-| `PairingSecret.swift` | secret file (Application Support, 0700/0600, atomic) load/create/reset, constant-time compare |
+| `TailscaleIdentity.swift` | owner login from `tailscale status --json` (cached, Settings override), header check (§12 D32) |
 | `Permissions.swift` | preflight/request/open-settings/relaunch |
 | `Server.swift` | Hummingbird app: static files (bundle or `MWR_WEB_ROOT`), `/ws` |
 | `Session.swift` | one active client, auth, message decode/dispatch, replace logic, pings |
@@ -675,20 +680,20 @@ All acceptance checks run on a real iPhone (Safari) against a real Mac through
    rebuilds.
 3. On the Mac, grant **Screen Recording** (then Relaunch) and **Accessibility** through
    the Setup window.
-4. Run `tailscale serve --bg http://127.0.0.1:8765` once, and enter
-   `https://<your-mac>.<tailnet>.ts.net` as the iPhone URL in Settings.
-5. On the iPhone, scan the QR code from **Pair iPhone…**. Optionally, use Share →
-   **Add to Home Screen**, open it, and paste the pairing code once.
+4. Run `tailscale serve --bg http://127.0.0.1:8765` once.
+5. On an iPhone signed in to Tailscale with the **same account as the Mac** (§12 D32), open
+   `https://<your-mac>.<tailnet>.ts.net/` in Safari. Optionally, use Share → **Add to
+   Home Screen**. There is no pairing step.
 6. Keep the Mac unlocked while using it remotely. Confirm macOS's periodic Screen
    Recording prompts when they appear.
 
 ## 9. Security summary
 - The server is reachable only through loopback, so only `tailscale serve` (the tailnet)
   and local processes can reach it.
-- All functionality requires the 256-bit pairing secret, and there is one client at a
-  time.
-- The secret is kept in an owner-only file on the Mac (D6) and the phone's `localStorage`. It is carried
-  in a URL fragment only during QR pairing. It is never logged.
+- All functionality requires the Mac owner's Tailscale identity (§12 D32), and there is
+  one client at a time.
+- *(§12 D32)* Access is limited to the Mac owner's Tailscale login, which `tailscale
+  serve` asserts in `Tailscale-User-Login`. There is no secret to store or leak.
 - Uploaded files go to the per-user temp directory with mode 0700 and are deleted after
   24 h.
 - Anyone who can already run processes as the Mac user, or who controls a paired phone,
@@ -711,10 +716,9 @@ changes the UX, the protocol, or the permissions.
   text. It also waits 60 ms after posting, before it restores the saved source. It switches
   only when the current source is not already the ASCII-capable one. The TIS calls run on
   the main thread.
-- **D6 Keychain access after a rebuild.** *(Superseded by the D6 amendment: the secret is a
-  file and no Keychain prompt can occur.)* With the ad-hoc signature (D17), a rebuilt binary
-  was a new code identity, and reading the Keychain item waited on a macOS "allow access"
-  prompt.
+- **D6 Keychain access after a rebuild.** *(Obsolete: §12 D32 removed the Keychain.)*
+  With the ad-hoc signature (D17), a rebuilt binary was a new code identity, and reading
+  the Keychain item waited on a macOS "allow access" prompt.
 - **D17 toolchain.** `scripts/build-app.sh` runs `xcrun swift`, so it uses the selected
   Xcode, or `DEVELOPER_DIR` when that is set, rather than whatever `swift` comes first in
   `PATH`. The current dependency graph (swift-crypto 5 through swift-nio-ssl) needs Swift
@@ -1162,3 +1166,49 @@ D27), so the trackpad model can be used now. None of these notes changes the UX 
   requires unit tests for the gesture state machine, which is JavaScript. They use
   Node's built-in `node:test` with no dependencies and no build step
   (`node --test tests/web/*.test.mjs`). Nothing is added to the web client.
+
+## 12. Access by Tailscale identity (approved by the user; supersedes D6)
+
+### D32. Authentication: the Mac owner's Tailscale login
+- **Why (user decision):** pairing does not work for the user's real use. The pairing
+  code has to be carried to the phone, and when the user connects remotely there is no
+  Mac screen at hand to scan a QR code or copy a code from. Storing the secret also caused
+  macOS Keychain password dialogs on every ad-hoc rebuild. `tailscale serve` already knows
+  who is connecting, so the Mac uses that identity instead.
+- **Rule:** the server stays bound to `127.0.0.1` (D2). For every HTTP request and the
+  `/ws` upgrade, the `Tailscale-User-Login` header, which `tailscale serve` adds for a
+  signed-in tailnet user, must equal the **allowed login** (compared ignoring case and
+  surrounding spaces).
+  - Allowed login = Settings override if set, else the owner of this Mac's Tailscale
+    node: `tailscale status --json` → `Self.UserID` → `User[<id>].LoginName`.
+  - The CLI is found at `/Applications/Tailscale.app/Contents/MacOS/Tailscale`, then
+    `/opt/homebrew/bin/tailscale`, `/usr/local/bin/tailscale`, then `PATH`. The answer is
+    cached for the process lifetime. While it is unknown (Tailscale not installed, not
+    running, or logged out) the CLI is asked again at most every 30 s, and **every request
+    is rejected**.
+  - No header (direct local access, or a tagged device, which has no user login) or
+    another login is rejected: HTTP **403** with the text "Not allowed: sign in to
+    Tailscale as the Mac owner"; `/ws` is upgraded and then closed with **4001**
+    (`not_allowed`), because a refused upgrade reaches the page only as an unexplained
+    error. The phone shows a **Not allowed** screen with that sentence, a note that the
+    allowed account is shown in the Mac menu, and **Try again**.
+  - The header value is never logged; logs record only the reason (`missingHeader`,
+    `otherUser`, `ownerUnknown`).
+- **Removed:** the pairing secret and its storage (Keychain or file), `auth` message and
+  `4003`, Pair iPhone… (QR and code), Reset pairing…, the iPhone URL setting, and the
+  phone's Pair screen. The phone deletes a leftover `mwr.secret` from `localStorage`.
+- **Kept:** single client (a new session replaces the old one with 4002), `hello` as
+  the first server message, everything after it.
+- **Mac UI:** the menu shows "Allowed: <login>" (or "Allowed: unknown (sign in to
+  Tailscale)"). Setup and Settings show the allowed login field (empty = this Mac's
+  login).
+- **Threat note (user decision):** a malicious local process on the Mac can connect to
+  `127.0.0.1` and send a forged `Tailscale-User-Login` header. This is out of scope: a
+  malicious process running as the user is already a more serious compromise than this
+  app, and it can post input events itself. Remote tailnet devices cannot forge the
+  header, because `tailscale serve` sets it from the WireGuard peer identity and drops a
+  client-supplied value.
+- **Human setup:** no pairing step. Sign in to Tailscale on the iPhone with the same
+  account as the Mac, run the `tailscale serve` command once, and open the https URL it
+  prints in Safari (optionally Share → Add to Home Screen).
+

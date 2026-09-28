@@ -1,15 +1,14 @@
-// State machine and socket (DESIGN.md D6, D16, D18, §3, §4).
+// State machine and socket (DESIGN.md D16, D18, D32, §3, §4).
 import { Viewer } from './viewer.js';
 import { TextInput } from './input.js';
 
-const SECRET_KEY = 'mwr.secret';
 const WINDOW_KEY = 'mwr.windowId';
 const TITLE_KEY = 'mwr.windowTitle';
 const BACKOFF_MS = [500, 1000, 2000, 5000];
 const DEAD_AFTER_MS = 15000;
 
 const $ = (id) => document.getElementById(id);
-const screens = { pair: $('pair'), list: $('list'), viewer: $('viewer') };
+const screens = { denied: $('denied'), list: $('list'), viewer: $('viewer') };
 
 let socket = null;
 let authed = false;
@@ -20,32 +19,20 @@ let deadTimer = null;
 let replaced = false;
 let screen = null;
 
-// ---------- pairing ----------
+// ---------- access (D32) ----------
 
-function takePairingFragment() {
-  const m = location.hash.match(/(?:^#|&)pair=([^&]+)/);
-  if (!m) return;
-  localStorage.setItem(SECRET_KEY, decodeURIComponent(m[1]));
-  history.replaceState(null, '', location.pathname + location.search);
-}
+// The Mac admits only its owner's Tailscale login; it closes other connections with 4001.
+let denied = false;
 
-function secret() { return localStorage.getItem(SECRET_KEY); }
-
-function showPair(errorText) {
+function showDenied() {
+  denied = true;
   closeSocket();
-  show('pair');
-  const err = $('pair-error');
-  err.textContent = errorText || '';
-  err.hidden = !errorText;
+  show('denied');
 }
 
-$('pair-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const code = $('pair-code').value.trim();
-  if (!code) return;
-  localStorage.setItem(SECRET_KEY, code);
-  $('pair-code').value = '';
-  $('pair-code').blur();
+$('denied-retry').addEventListener('click', () => {
+  denied = false;
+  backoffIndex = 0;
   connect();
 });
 
@@ -156,23 +143,19 @@ function wsURL() {
 
 function connect() {
   clearTimeout(reconnectTimer);
-  if (!secret()) { showPair(); return; }
   if (document.hidden) return;
   closeSocket();
   replaced = false;
   authed = false;
   setConnDots('wait');
-  if (screen === null || screen === 'pair') show(viewingWindowId() ? 'viewer' : 'list');
+  if (screen === null || screen === 'denied') show(viewingWindowId() ? 'viewer' : 'list');
   if (screen === 'viewer') {
     $('viewer-title').textContent = sessionStorage.getItem(TITLE_KEY) || '';
   }
   const ws = new WebSocket(wsURL());
   ws.binaryType = 'arraybuffer';
   socket = ws;
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ t: 'auth', secret: secret(), client: 'web/0.1' }));
-    armDeadTimer();
-  };
+  ws.onopen = () => armDeadTimer();
   ws.onmessage = (ev) => {
     if (ws !== socket) return;
     armDeadTimer();
@@ -216,8 +199,7 @@ function armDeadTimer() {
 
 function onClosed(code) {
   if (code === 4001) {
-    localStorage.removeItem(SECRET_KEY);
-    showPair('Pairing code was rejected. Pair again from the Mac menu.');
+    showDenied();
     return;
   }
   if (code === 4002) {
@@ -334,7 +316,7 @@ document.addEventListener('visibilitychange', () => {
     clearTimeout(reconnectTimer);
     closeSocket();
     setConnDots('off');
-  } else if (!replaced && secret()) {
+  } else if (!replaced && !denied) {
     if (screen === 'viewer') {
       viewer.setDimmed(true);
       overlay('Reconnecting…');
@@ -364,5 +346,6 @@ const textInput = new TextInput({
   send,
 });
 
-takePairingFragment();
-if (secret()) connect(); else showPair();
+// Earlier versions paired with a stored secret; it is no longer used.
+localStorage.removeItem('mwr.secret');
+connect();
