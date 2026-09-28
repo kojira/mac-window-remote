@@ -4,7 +4,7 @@ View and operate **one Mac window at a time** from an iPhone.
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit) and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
-- Pinch-zoom and pan the window, tap to click, drag to scroll, and type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent).
+- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent).
 
 ## Status
 
@@ -40,7 +40,7 @@ CODESIGN_IDENTITY="<name of the identity>" scripts/build-app.sh
 
 Development: `MWR_WEB_ROOT=$PWD/web build/MacWindowRemote.app/Contents/MacOS/MacWindowRemote` serves the web client from disk, so client edits need only a reload.
 
-Tests: `cd mac && swift test`.
+Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer.
 
 ## Setup
 

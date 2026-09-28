@@ -1120,3 +1120,37 @@ Wi-Fi off**.
   learns a peer-reflexive candidate). The spike did not cover a phone; acceptance 1 on
   cellular is the check. If it fails, the fix to design is a Mac-side note in D27, not a
   public STUN server.
+
+### Revision 2 implementation notes (step 1: trackpad input on the slice 1 transport)
+Step 1 ships D23–D26 and the D28 input messages before the WebRTC transport (D20–D22,
+D27), so the trackpad model can be used now. None of these notes changes the UX that
+§11 describes; step 2 removes the interim parts.
+
+- **Interim transport.** Until the data channels exist, the D28 `motion` and `control`
+  messages (`move`, `scroll`, `click`, `rightClick`, `drag`, `text`, `key`) and the
+  server's `cursor` message travel on the authenticated WebSocket. Invalid `move` or
+  `scroll` messages are dropped silently, as they will be on `motion`; the others get
+  `bad_request`. The JPEG frames, `frame.ack`, and the frame header stay until D21.
+- **Overlay placement.** The overlay and the D24 delta scale use the frame header's
+  content rect in place of the `<video>` intrinsic size, which does not exist yet. The
+  scale is the same quantity: the content's width and height in CSS px at the current
+  zoom.
+- **Cursor edges.** `(cu, cv) = (1, 1)` maps to 1 pt inside the right and bottom edges,
+  because the point at `maxX`/`maxY` belongs to whatever is next to the window. The
+  clamp itself stays [0, 1].
+- **Click count distance.** "Within 4 pt" (D26) is the Euclidean distance. A right-click
+  or drag start resets the count.
+- **Gesture timing gaps.** A still single touch that lifts after `TAP_MAX_MS` but before
+  `LONG_PRESS_MS` does nothing. If the long-press timer has not fired when a still touch
+  lifts after `LONG_PRESS_MS`, the lift starts the drag lock. After a gesture upgrades
+  (1→2→3 fingers), tap slop is measured from where the fingers were at the upgrade.
+- **Motion ordering.** Discrete inputs post the move and scroll that arrived before them
+  first; motion posts never overlap. A click is posted at the cursor as it was when the
+  click arrived. If later moves were already posted, the pointer is moved back to the
+  current cursor afterwards.
+- **Focus.** D25's focus request "when viewing starts" happens after the capture starts.
+  `drag end` does not request focus, because the button is released where the drag is.
+- **JavaScript unit tests.** §7 says there is no JavaScript test harness, but D30 item 10
+  requires unit tests for the gesture state machine, which is JavaScript. They use
+  Node's built-in `node:test` with no dependencies and no build step
+  (`node --test tests/web/*.test.mjs`). Nothing is added to the web client.
