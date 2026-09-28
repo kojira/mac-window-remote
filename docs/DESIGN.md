@@ -335,3 +335,114 @@ following:
 
 A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom and pan.
 
+### D15. Frames stop when nobody is watching
+- Capture runs only between `view.start` and `view.stop` or disconnect, and only for the
+  one selected window.
+- When the page becomes hidden (`visibilitychange`), for example because the phone is
+  locked or Safari is in the background, the client closes the socket. It reconnects
+  when the page is visible again.
+- While capture runs, the app holds an `IOPMAssertion` of type
+  `PreventUserIdleDisplaySleep`, named "mac-window-remote viewing". It releases the
+  assertion when capture stops.
+
+### D16. Permissions onboarding
+- **At launch**, the app checks `CGPreflightScreenCaptureAccess()` and
+  `AXIsProcessTrusted()`. The menu bar icon shows a warning badge while either is
+  missing.
+- **Setup & Permissions window.** It opens automatically on first launch or when a
+  permission is missing. It has two rows, each with a status (✅/⚠️) and two buttons:
+  - **Screen Recording:**
+    - "Request" calls `CGRequestScreenCaptureAccess()`.
+    - "Open Settings" opens
+      `x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`.
+    - After the permission is granted, the app shows "Relaunch required" with a
+      **Relaunch** button, because macOS applies the grant only after a relaunch.
+  - **Accessibility:**
+    - "Request" calls `AXIsProcessTrustedWithOptions` with the prompt option.
+    - "Open Settings" opens `…?Privacy_Accessibility`.
+    - Status is re-polled every 2 s while the window is open.
+  - The same window shows the `tailscale serve` command, the iPhone URL field, and a
+    link to Pair.
+- **Web client:** `hello.permissions` reports both permissions.
+  - Missing screen recording: the window list is replaced by "Screen Recording permission
+    is missing on the Mac. Open the Mac menu bar app → Setup."
+  - Missing accessibility: the viewer works, and input actions show a toast "Mac needs
+    Accessibility permission to control windows."
+
+### D17. Build, signing, and run
+- **Repo layout:**
+  ```
+  mac/Package.swift                    SwiftPM, macOS 14, deps: hummingbird, hummingbird-websocket
+  mac/Sources/MacWindowRemote/         app sources (see §5)
+  mac/Tests/MacWindowRemoteTests/      unit tests (see §7)
+  mac/Resources/Info.plist             LSUIElement, bundle id, usage strings
+  web/                                 index.html, app.js (+ modules), style.css, manifest, icons
+  scripts/build-app.sh                 swift build -c release → build/MacWindowRemote.app
+  ```
+- `scripts/build-app.sh` does the following:
+  1. It builds in release mode.
+  2. It assembles `build/MacWindowRemote.app`, copying the binary, `Info.plist`, and
+     `web/` to `Contents/Resources/web`.
+  3. It signs the app with `codesign --force --sign "${CODESIGN_IDENTITY:--}"`.
+- **Signing and permissions:**
+  - With the ad-hoc default (`-`), macOS ties the permission grants to the exact binary,
+    so **each rebuild may require granting Screen Recording and Accessibility again.**
+  - The README recommends setting `CODESIGN_IDENTITY` to an Apple Development certificate
+    (a free Apple ID is enough) so grants survive rebuilds.
+- **Run:** `open build/MacWindowRemote.app`.
+- **Development:** setting the environment variable `MWR_WEB_ROOT=<repo>/web` makes the
+  server read web files from disk, so client edits need only a reload.
+- **Launch at login:** a toggle in Settings using `SMAppService.mainApp`.
+- **No CI** in these slices. Unit tests run with `swift test` in `mac/`.
+
+### D18. Reconnect and failure behavior
+The client state machine:
+
+```
+Unpaired ──code/QR──▶ Connecting ──hello──▶ WindowList ──tap──▶ Viewing
+   ▲                     │  ▲                     ▲               │
+   └──── close 4001 ─────┘  └── backoff ◀── socket closed/timeout ┘
+                                                     (resume last window)
+```
+- **Reconnect:**
+  - Backoff is 0.5 s, 1 s, 2 s, then 5 s maximum. It resets after `hello`.
+  - While reconnecting, the viewer keeps the last frame, dimmed, with "Reconnecting…".
+  - The selected `windowId` is kept in `sessionStorage`. After reconnect, the client sends
+    `view.start` for it again. If the reply is `window_gone`, the client returns to the
+    list with the toast "Window closed".
+- **Liveness:**
+  - The server sends a WebSocket ping every 10 s.
+  - The client treats 15 s without any message as dead. This is safe because pings arrive
+    as control frames, and during idle viewing the server sends
+    `{t:"ping"}` text every 10 s too.
+  - The client then closes and reconnects.
+- **Server-side failures:**
+  | Condition | Server behavior | Client shows |
+  |---|---|---|
+  | Screen Recording missing | `view.state capture_unavailable reason=permission_screen_recording` | Permission message (D16) |
+  | `SCStream` stops with error (e.g. screen locked, display sleep) | `view.state capture_unavailable reason=stream_stopped`; retry `view.start` automatically every 5 s while the client stays in the viewer | "Mac screen unavailable (locked or asleep?) — retrying" |
+  | Window closed / id vanished | `view.state window_gone` | Back to list + toast |
+  | Accessibility missing on input | `error permission_accessibility` | Toast (D16) |
+  | Input outside current window | `error stale_coordinates` | Nothing (silent) |
+  | Bad or oversized message | `error bad_request` / `too_large` | Toast |
+- A new `view.start` while already viewing stops the old stream first.
+- A disconnect stops capture, releases a held mouse button (D9), and releases the display
+  assertion (D15).
+
+### D19. Mac menu bar UX
+- **Icon:** SF Symbol `rectangle.on.rectangle`. It is filled while a client is viewing,
+  so a person at the Mac can see that the screen is being watched. It shows a warning
+  badge while a permission is missing.
+- **Menu:**
+  - Status line: "Idle", "Connected", "Viewing: <App> — <Title>", or "Permissions
+    needed"
+  - Pair iPhone…
+  - Setup & Permissions…
+  - Settings… (port, iPhone URL, launch at login)
+  - Open uploads folder
+  - Reset pairing…
+  - Quit
+- **Logs:** `os.Logger` (subsystem `mac-window-remote`). Logs contain connections, errors,
+  and window ids only. They **never contain the secret, typed text, clipboard content, or
+  image data.**
+
