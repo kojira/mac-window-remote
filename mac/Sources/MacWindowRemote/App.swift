@@ -55,12 +55,11 @@ final class AppState: ObservableObject {
     }
 
     func launch() {
-        // Reading the Keychain can wait on a macOS "allow access" prompt (after an ad-hoc
-        // rebuild), so it runs off the main thread; the server starts once the secret is known.
-        serverError = "Waiting for Keychain access…"
-        Task.detached {
-            let secret = PairingSecret.loadOrCreate()
-            await MainActor.run { AppState.shared.secretLoaded(secret) }
+        do {
+            secretLoaded(try PairingSecretStore.default.loadOrCreate())
+        } catch {
+            log.error("pairing secret unavailable: \(String(describing: error), privacy: .public)")
+            serverError = "Server not running (could not store the pairing secret)"
         }
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in AppState.shared.refreshPermissions() }
@@ -115,7 +114,16 @@ final class AppState: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        secret = PairingSecret.reset()
+        do {
+            secret = try PairingSecretStore.default.reset()
+        } catch {
+            log.error("pairing reset failed: \(String(describing: error), privacy: .public)")
+            let failed = NSAlert()
+            failed.messageText = "Could not reset pairing"
+            failed.informativeText = "The new pairing secret could not be saved. The current pairing still works."
+            failed.runModal()
+            return
+        }
         let newSecret = secret
         Task { await hub?.resetSecret(newSecret) }
     }

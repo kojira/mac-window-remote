@@ -155,9 +155,18 @@ The user experience, end to end:
   (D6) is what restricts who can use it.
 
 ### D6. Authentication: a single pairing secret
-- On first launch the Mac app generates **32 random bytes** (`SecRandomCopyBytes`),
-  encoded as base64url. This is the pairing secret. It is stored in the **Keychain**
-  (generic password, service `mac-window-remote`). It is never written to logs.
+- On first launch the Mac app generates **32 random bytes** (the system CSPRNG),
+  encoded as base64url. This is the pairing secret. It is stored in a **file**,
+  `~/Library/Application Support/mac-window-remote/pairing-secret`. The directory is
+  mode 0700 and the file mode 0600. The file is written to a temporary file and renamed
+  over the old one, so a crash never leaves a partial secret. **Reset pairing…** replaces it.
+  The secret is never written to logs. *(Amended: the Keychain was used until then; see
+  "D6 amendment" below.)*
+- **D6 amendment (user requirement): no Keychain.** With the ad-hoc signature (D17), every
+  rebuild is a new code identity, and reading the Keychain item showed a macOS password
+  dialog on each rebuild. The app now uses no Keychain or Security API at all. Nothing is
+  migrated from the old Keychain item; the phone pairs again once. Protection is the
+  file mode: anyone who can read files as the Mac user can already control the Mac (§9).
 - **Pair iPhone… window (menu bar):**
   - A QR code of `<iPhone URL>/#pair=<secret>`.
   - The same secret as a copyable "pairing code".
@@ -560,7 +569,7 @@ Unknown key names are rejected with `bad_request`.
 |---|---|
 | `App.swift` | `@main`, `MenuBarExtra`, windows for Pair / Setup / Settings |
 | `Settings.swift` | UserDefaults (port, iPhone URL), `SMAppService` toggle |
-| `PairingSecret.swift` | Keychain get/create/reset, constant-time compare |
+| `PairingSecret.swift` | secret file (Application Support, 0700/0600, atomic) load/create/reset, constant-time compare |
 | `Permissions.swift` | preflight/request/open-settings/relaunch |
 | `Server.swift` | Hummingbird app: static files (bundle or `MWR_WEB_ROOT`), `/ws` |
 | `Session.swift` | one active client, auth, message decode/dispatch, replace logic, pings |
@@ -678,7 +687,7 @@ All acceptance checks run on a real iPhone (Safari) against a real Mac through
   and local processes can reach it.
 - All functionality requires the 256-bit pairing secret, and there is one client at a
   time.
-- The secret is kept in the Mac Keychain and the phone's `localStorage`. It is carried
+- The secret is kept in an owner-only file on the Mac (D6) and the phone's `localStorage`. It is carried
   in a URL fragment only during QR pairing. It is never logged.
 - Uploaded files go to the per-user temp directory with mode 0700 and are deleted after
   24 h.
@@ -702,11 +711,10 @@ changes the UX, the protocol, or the permissions.
   text. It also waits 60 ms after posting, before it restores the saved source. It switches
   only when the current source is not already the ASCII-capable one. The TIS calls run on
   the main thread.
-- **D6 Keychain access after a rebuild.** With the ad-hoc signature (D17), a rebuilt binary
-  is a new code identity. Reading the existing Keychain item then waits on a macOS "allow
-  access" prompt. The app reads the secret off the main thread, so the menu stays usable
-  and shows "Waiting for Keychain access…". The server starts after the read. Signing with
-  `CODESIGN_IDENTITY` avoids the prompt, just as it keeps the TCC grants.
+- **D6 Keychain access after a rebuild.** *(Superseded by the D6 amendment: the secret is a
+  file and no Keychain prompt can occur.)* With the ad-hoc signature (D17), a rebuilt binary
+  was a new code identity, and reading the Keychain item waited on a macOS "allow access"
+  prompt.
 - **D17 toolchain.** `scripts/build-app.sh` runs `xcrun swift`, so it uses the selected
   Xcode, or `DEVELOPER_DIR` when that is set, rather than whatever `swift` comes first in
   `PATH`. The current dependency graph (swift-crypto 5 through swift-nio-ssl) needs Swift

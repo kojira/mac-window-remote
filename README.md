@@ -31,7 +31,7 @@ scripts/build-app.sh
 open build/MacWindowRemote.app
 ```
 
-The script signs ad-hoc by default. With an ad-hoc signature, macOS may ask again for Screen Recording, Accessibility, and Keychain access after each rebuild. To keep those grants, sign with your Apple Development certificate (a free Apple ID is enough):
+The script signs ad-hoc by default. With an ad-hoc signature, macOS may ask again for Screen Recording and Accessibility after each rebuild. To keep those grants, sign with your Apple Development certificate (a free Apple ID is enough):
 
 ```sh
 security find-identity -v -p codesigning     # pick one
@@ -53,7 +53,7 @@ Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the ge
    To use it from the Home Screen, choose Share → **Add to Home Screen**, open the icon, and paste the pairing code shown under the QR code.
 7. Keep the Mac unlocked while you use it remotely.
 
-The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every function needs the pairing secret. **Reset pairing…** in the menu revokes the old secret.
+The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every function needs the pairing secret. **Reset pairing…** in the menu revokes the old secret. The secret is stored in `~/Library/Application Support/mac-window-remote/pairing-secret` (readable only by your user); the app does not use the Keychain. If you used an earlier build that kept the secret in the Keychain, pair the iPhone again once. The old Keychain item "mac-window-remote" is no longer read and can be deleted in Keychain Access.
 
 ## License
 

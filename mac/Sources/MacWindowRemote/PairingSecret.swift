@@ -1,16 +1,13 @@
+import Darwin
 import Foundation
-import Security
 
-/// The single pairing secret (DESIGN.md D6): 32 random bytes, base64url, kept in the Keychain.
-/// It is never logged.
+/// The single pairing secret (DESIGN.md D6): 32 random bytes, base64url, kept in a file that
+/// only the user can read. It is never logged.
 enum PairingSecret {
-    static let keychainService = "mac-window-remote"
-    static let keychainAccount = "pairing-secret"
-
     static func generate() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        precondition(status == errSecSuccess, "SecRandomCopyBytes failed")
+        // SystemRandomNumberGenerator is the system CSPRNG (arc4random_buf) on Apple platforms.
+        var rng = SystemRandomNumberGenerator()
+        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
         return base64url(Data(bytes))
     }
 
@@ -33,49 +30,65 @@ enum PairingSecret {
         }
         return diff == 0 && !b.isEmpty
     }
+}
 
-    // MARK: Keychain
+/// Where the pairing secret lives: `<directory>/pairing-secret`, directory 0700, file 0600,
+/// replaced atomically (D6). The app uses `default`; tests pass a temporary directory.
+struct PairingSecretStore: Sendable {
+    let directory: URL
 
-    static func loadOrCreate() -> String {
-        if let existing = load() { return existing }
-        let secret = generate()
-        store(secret)
+    static let fileName = "pairing-secret"
+
+    /// `~/Library/Application Support/mac-window-remote`.
+    static var `default`: PairingSecretStore {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return PairingSecretStore(directory: support.appendingPathComponent("mac-window-remote", isDirectory: true))
+    }
+
+    enum Failure: Error {
+        case io(String, Int32)
+    }
+
+    var file: URL { directory.appendingPathComponent(Self.fileName) }
+
+    /// The stored secret, or a new one stored on first launch.
+    func loadOrCreate() throws -> String {
+        if let data = try? Data(contentsOf: file),
+           let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !text.isEmpty {
+            return text
+        }
+        return try reset()
+    }
+
+    /// "Reset pairing": a new secret replaces the file.
+    func reset() throws -> String {
+        let secret = PairingSecret.generate()
+        try write(secret)
         return secret
     }
 
-    static func reset() -> String {
-        let secret = generate()
-        store(secret)
-        return secret
-    }
-
-    private static func baseQuery() -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
-        ]
-    }
-
-    private static func load() -> String? {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data, let s = String(data: data, encoding: .utf8), !s.isEmpty
-        else { return nil }
-        return s
-    }
-
-    private static func store(_ secret: String) {
-        let data = Data(secret.utf8)
-        let status = SecItemUpdate(baseQuery() as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var add = baseQuery()
-            add[kSecValueData as String] = data
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(add as CFDictionary, nil)
+    private func write(_ secret: String) throws {
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        guard chmod(directory.path, 0o700) == 0 else { throw Failure.io("chmod directory", errno) }
+        // The temporary file is created 0600, so the secret is never readable by others, and
+        // rename(2) replaces the old file atomically.
+        let temporary = directory.appendingPathComponent(".\(Self.fileName).\(UUID().uuidString)")
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { throw Failure.io("open", errno) }
+        let bytes = Array(secret.utf8)
+        let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        let synced = fsync(fd)
+        close(fd)
+        guard written == bytes.count, synced == 0 else {
+            unlink(temporary.path)
+            throw Failure.io("write", errno)
+        }
+        guard rename(temporary.path, file.path) == 0 else {
+            let code = errno
+            unlink(temporary.path)
+            throw Failure.io("rename", code)
         }
     }
 }
