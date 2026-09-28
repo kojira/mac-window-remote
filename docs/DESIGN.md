@@ -59,3 +59,117 @@ The user experience, end to end:
 - Window thumbnails and app icons in the window list.
 - Non-macOS hosts.
 
+## 2. Key decisions
+
+### D1. One process on the Mac, one static web client
+- **Mac:** a single Swift app, `MacWindowRemote.app`, running as a menu bar agent
+  (`LSUIElement = YES`) with no Dock icon. It contains the HTTP/WebSocket server,
+  capture, input injection, clipboard, and uploads. It has no helper processes and no
+  daemons.
+- **iPhone:** a static web app (HTML + CSS + vanilla ES modules, **no build step and no
+  framework**) served by the Mac app. It includes a minimal `manifest.webmanifest` and
+  `apple-mobile-web-app-capable` meta so it can be added to the Home Screen.
+- **Why:** this is the fewest moving parts. Swift is needed for ScreenCaptureKit and
+  CGEvent. A no-build web client can be edited and reloaded without extra tooling.
+- **Minimum versions:** macOS 14 Sonoma or later (for `SCContentFilter.pointPixelScale`,
+  `SCStreamConfiguration.ignoreShadowsSingleWindow`, and Hummingbird 2). iOS 16.4 or
+  later, using Safari or a Home Screen web app.
+
+### D2. Server stack and binding
+- The server uses **Hummingbird 2** with **HummingbirdWebSocket** through SwiftPM. It
+  serves static files and one WebSocket endpoint on one port.
+- It binds to **`127.0.0.1` only**. The default port is `8765`, and the port can be
+  changed in Settings. Changing the port restarts the listener.
+- Only `tailscale serve` (D5) and local processes can reach the server. It never binds to
+  `0.0.0.0` or to a tailnet or LAN interface.
+- Routes:
+  - `GET /`, `/app.js`, `/*.js`, `/style.css`, `/manifest.webmanifest`, `/icon-*.png`:
+    static files, served without authentication. They contain no secrets.
+  - `GET /ws`: WebSocket. The first message must be `auth` (D6). **All functionality
+    goes over this socket**, including image upload, so only one channel needs
+    authentication.
+
+### D3. Transport for the MVP: JPEG frames over WebSocket with ack-based flow control
+- The server sends binary WebSocket messages with the framing in §4.1. Each message
+  holds a JSON header and one **complete JPEG** of the window. There are no diff tiles.
+- **Frame source:** `SCStream` with `SCContentFilter(desktopIndependentWindow:)`.
+  - `showsCursor = true`, `ignoreShadowsSingleWindow = true`.
+  - `minimumFrameInterval = 1/15 s`, `queueDepth = 5`, pixel format BGRA.
+  - Frames whose `SCStreamFrameInfo.status` is not `.complete` are skipped. This covers
+    idle frames, where the window has not changed, so a static window costs no
+    bandwidth.
+- **Encoding:** `VTCreateCGImageFromCVPixelBuffer` to `CGImageDestination` (JPEG, quality
+  0.7) on a serial encode queue.
+- **Flow control:** at most **one frame is in flight**. After sending frame N, the server
+  waits for `frame.ack {frameId: N}`. While it waits, it keeps only the newest complete
+  `CMSampleBuffer`, holding one reference and replacing it when a newer one arrives.
+  When the ack arrives, it encodes and sends that buffer. As a result, a slow network
+  lowers the frame rate rather than adding latency.
+- **Why JPEG:** trivial on both ends. `createImageBitmap` decodes in Safari. The MVP is
+  a single window at 15 fps or less on a tailnet, so bandwidth of about 1–5 Mbit/s
+  while the window changes is acceptable. There are no codec or WebCodecs compatibility
+  risks for the first slice.
+- **Later path (not in this design's slices):** H.264 via VideoToolbox
+  (`VTCompressionSession`, low-latency, Annex B), decoded in the browser with WebCodecs
+  `VideoDecoder`. It would use the same WebSocket and the same header framing with
+  `t: "video"`. The ack-based flow control would be replaced by keyframe requests.
+  WebRTC is not planned, because inside a tailnet it adds signaling and ICE complexity
+  with no benefit.
+
+### D4. Capture resolution and Retina
+- The output size in pixels is the window size in points × `filter.pointPixelScale`.
+  For example, a window on a Retina display has scale 2.
+- The long edge is capped at **2560 px**, scaling both axes proportionally. This keeps
+  text sharp when pinch-zoomed on a phone and bounds JPEG size.
+- The window's bounds are polled every **500 ms** using `CGWindowListCopyWindowInfo`
+  (`kCGWindowListOptionIncludingWindow`, window id). If the size changes by 1 pt or more,
+  the server calls `stream.updateConfiguration` with the new output size. If the window
+  id disappears from the list, the server sends `view.state window_gone` and stops the
+  stream.
+
+### D5. HTTPS via `tailscale serve` (secure context), with a clipboard fallback
+- iOS Safari exposes `navigator.clipboard.readText()` only in a secure context, and only
+  in response to a user gesture. The app therefore relies on **`tailscale serve`**, which
+  terminates HTTPS with a valid `*.ts.net` certificate and proxies to
+  `http://127.0.0.1:8765`. WebSocket proxying works through it.
+- The user runs a command once. The app shows it with a Copy button and does not run it:
+  `tailscale serve --bg http://127.0.0.1:8765`
+- The page URL becomes `https://<your-mac>.<tailnet>.ts.net/`.
+- The Mac app does **not** call Tailscale APIs or CLIs. The user enters the base URL once
+  in Settings ("iPhone URL"). The app uses it only to build the pairing QR code.
+- **Clipboard fallback:** if `readText()` rejects or is unavailable, a sheet with a
+  textarea opens. The user long-presses and chooses Paste, then taps Send. This is also
+  the path when the page is opened over plain HTTP.
+- `tailscale serve` exposes the page to every device in the tailnet. The pairing secret
+  (D6) is what restricts who can use it.
+
+### D6. Authentication: a single pairing secret
+- On first launch the Mac app generates **32 random bytes** (`SecRandomCopyBytes`),
+  encoded as base64url. This is the pairing secret. It is stored in the **Keychain**
+  (generic password, service `mac-window-remote`). It is never written to logs.
+- **Pair iPhone… window (menu bar):**
+  - A QR code of `<iPhone URL>/#pair=<secret>`.
+  - The same secret as a copyable "pairing code".
+  - A note if the iPhone URL is not set.
+- **Web client pairing:**
+  - If `location.hash` contains `pair=`, the client stores the secret in `localStorage`
+    (`mwr.secret`) and removes the fragment with `history.replaceState`. The fragment is
+    never sent to the server and never appears in proxy logs.
+  - If no secret is stored, the client shows the Pair screen with a text field for the
+    pairing code. This matters because a Home Screen web app has separate storage from
+    Safari, so a user who adds the page to the Home Screen after pairing in Safari pastes
+    the code once more.
+- **WebSocket authentication:**
+  - The first client message must be `{"t":"auth","secret":…}` within 5 s.
+  - The server compares it in constant time.
+  - If it matches, the server replies with `hello`.
+  - Otherwise the server closes with code **4001** (`auth_failed`). The client then
+    clears the stored secret and shows the Pair screen with "Pairing code was rejected.
+    Pair again from the Mac menu."
+- **Reset pairing** (menu bar) generates a new secret and closes any open session with
+  4001.
+- **Single client:** a newly authenticated connection replaces the current one. The old
+  one is closed with **4002** (`replaced`) and shows "Opened on another device/tab".
+- No rate limiting and no Origin checks. The secret has 256 bits, the server is reachable
+  only through the tailnet, and nothing else carries authority.
+
