@@ -557,3 +557,108 @@ The web client (`web/`) contains `index.html`, `style.css`, `app.js` (state mach
 socket), `viewer.js` (canvas, transform, gestures), `input.js` (text field, key bar,
 custom buttons), and `manifest.webmanifest`.
 
+## 6. Slices and acceptance criteria
+All acceptance checks run on a real iPhone (Safari) against a real Mac through
+`tailscale serve`, unless marked *unit*.
+
+### Slice 1 — MVP: pair → pick window → view → zoom → click → type
+1. After a clean install, the Setup window guides the user through granting both
+   permissions, including the relaunch. The menu then shows "Idle" with no badge.
+2. The pairing QR code opens the page in Safari, which lands on the Windows list. A
+   wrong pairing code shows the rejection message. With a Home Screen web app, the user
+   can pair by pasting the code.
+3. The list shows on-screen windows as "App — Title". Minimized windows do not appear.
+4. When the user taps a window, the image appears within 2 s. When the window's content
+   changes on the Mac, the phone updates. A static window produces no frames: checking
+   the server log shows no frames sent for 10 s of idleness.
+5. Pinch zoom up to 8× shows sharp text on a Retina Mac. Two-finger pan works. Fit
+   resets zoom and pan.
+6. Tapping a button or link in the window (zoomed, and after the window was moved on the
+   Mac) clicks exactly that element. The window comes to the front if it was behind.
+   Double-tapping a word in a text editor selects it.
+7. One-finger drag scrolls a web page or document in the window.
+8. The user taps ⌨︎, types Japanese with the iPhone IME (for example, converting
+   "にほんご" to "日本語"), and presses Return. "日本語" appears in the focused text field
+   on the Mac. This holds **both with the Mac input source set to ABC and with it set to
+   Japanese kana mode.** Afterwards, the Mac input source is the same as before.
+9. Dictating a sentence and pressing Return inserts exactly the dictated text. Return
+   with an empty field sends Enter. Backspace with an empty field deletes one character
+   on the Mac.
+10. Reconnect: turning Wi-Fi off and on again on the phone, or locking and unlocking it,
+    returns to the same window automatically with "Reconnecting…" shown in between.
+    Closing the window on the Mac returns the phone to the list with "Window closed".
+11. Opening the page in a second tab or device closes the first with "Opened on another
+    device/tab".
+12. *Unit:*
+    - `CoordinateMapper`: identity, Retina scale, content letterbox, moved window,
+      resized window, out-of-bounds reject.
+    - Protocol binary framing round-trip.
+    - Text chunking: emoji or ZWJ sequences and combining marks are never split, and
+      chunks are ≤ 20 UTF-16 units.
+    - `PairingSecret` compare.
+    - Auth: a wrong or late first message closes with 4001/4003.
+
+### Slice 2 — Clipboard text
+1. After copying text on the iPhone, tapping 📋 and then allowing the iOS "Paste" prompt
+   shows a preview. **Copy to Mac** puts the text on the Mac clipboard, and ⌘V on the
+   Mac pastes the same text, including newlines and Japanese.
+2. **Paste into window** pastes it into the viewed window's focused field.
+3. When `readText` is denied, the fallback textarea sheet appears, and pasting there and
+   sending works the same way.
+4. Text over 1 MiB shows a "too large" toast, and the Mac clipboard is unchanged.
+
+### Slice 3 — Image → temp path
+1. When the user picks a photo, the toast shows the path, and the Mac clipboard contains
+   exactly that path. The file exists under `$TMPDIR/mac-window-remote/uploads/` and
+   opens as an image.
+2. With the action "type", the path is typed into the focused field of the viewed window.
+3. A 30 MiB file is rejected with a "too large" toast. A non-image file is rejected with
+   `unsupported_type`. Neither leaves a file behind.
+4. *Unit:* magic-byte sniffing for each accepted type, name format, and cleanup deleting
+   files older than 24 h and keeping newer ones.
+
+### Slice 4 — Key bar, custom buttons, pointer extras
+1. Esc, Tab, the arrows, ⏎, and ⌫ act on the Mac window.
+2. ⌘ followed by typing "a" selects all. ⌘ ⇧ followed by "z" redoes. Modifiers disarm
+   after use, and a long-press lock persists.
+3. A custom button such as "⌘⇧4" or "Ctrl-C" can be created. It survives a page reload,
+   works when tapped, and can be edited or deleted.
+4. Long-press and release right-clicks, and a context menu appears. Long-press and drag
+   selects text or moves a slider. Closing the socket during a drag leaves no stuck
+   button.
+5. *Unit:* the `KeyMap` table covers every name in §4.3, and the modifier event order is
+   correct.
+
+## 7. Testing approach
+- **Swift unit tests** (`swift test`) cover the pure, bug-prone logic: coordinate
+  mapping, framing, text chunking, key map, upload sniffing and cleanup, and the auth
+  handshake with a test WebSocket client.
+- Capture, CGEvent, and AX are verified by the manual device acceptance steps above,
+  because mocks of those APIs would only mirror the implementation.
+- No JavaScript test harness. The web client is small and is verified on a real device.
+
+## 8. Human setup steps (documented in the README when implemented)
+1. Install Tailscale on the Mac and the iPhone, signed in to the same tailnet. In the
+   Tailscale admin console, enable **MagicDNS** and **HTTPS Certificates**.
+2. Build and run the app (D17). Optionally set `CODESIGN_IDENTITY` so permissions survive
+   rebuilds.
+3. On the Mac, grant **Screen Recording** (then Relaunch) and **Accessibility** through
+   the Setup window.
+4. Run `tailscale serve --bg http://127.0.0.1:8765` once, and enter
+   `https://<your-mac>.<tailnet>.ts.net` as the iPhone URL in Settings.
+5. On the iPhone, scan the QR code from **Pair iPhone…**. Optionally, use Share →
+   **Add to Home Screen**, open it, and paste the pairing code once.
+6. Keep the Mac unlocked while using it remotely. Confirm macOS's periodic Screen
+   Recording prompts when they appear.
+
+## 9. Security summary
+- The server is reachable only through loopback, so only `tailscale serve` (the tailnet)
+  and local processes can reach it.
+- All functionality requires the 256-bit pairing secret, and there is one client at a
+  time.
+- The secret is kept in the Mac Keychain and the phone's `localStorage`. It is carried
+  in a URL fragment only during QR pairing. It is never logged.
+- Uploaded files go to the per-user temp directory with mode 0700 and are deleted after
+  24 h.
+- Anyone who can already run processes as the Mac user, or who controls a paired phone,
+  can already control the Mac. Defending against that is out of scope.
