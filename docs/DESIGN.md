@@ -446,3 +446,114 @@ Unpaired ──code/QR──▶ Connecting ──hello──▶ WindowList ─�
   and window ids only. They **never contain the secret, typed text, clipboard content, or
   image data.**
 
+## 3. iPhone screens
+
+1. **Pair.** "Scan the QR in the Mac menu bar → Pair iPhone…, or paste the pairing code."
+   It has a code field and a **Pair** button, and appears only when no secret is stored.
+2. **Windows.**
+   - A top bar with the title "Windows", a connection dot, and a Refresh button.
+   - Pull-to-refresh is not required.
+   - A list of rows: the **App name** in bold and the window title below it (or
+     "(untitled)"), sorted by app and then by title. There are no thumbnails.
+   - The list excludes this app's own windows and windows smaller than 50×50 pt.
+   - An empty state: "No windows on screen (minimized windows and other Spaces are not
+     shown)."
+3. **Viewer.**
+   - **Top bar** (auto-hides after 3 s, and tapping the top edge shows it): ‹ Windows,
+     title (App — Title), a **Fit** button, and a connection dot.
+   - **Canvas:** the rest of the screen, black letterbox, with the gestures in D14.
+   - **Bottom bar,** always visible and moving above the keyboard using
+     `visualViewport`:
+     - Slice 1: ⌨︎, which focuses the text field and brings up the iOS keyboard. With the
+       keyboard up, the text field is visible and Return sends (D10).
+     - Slice 2: 📋 Clipboard.
+     - Slice 3: 🖼 Image.
+     - Slice 4: the key bar row (D13).
+   - **Overlays:** "Reconnecting…", "Mac screen unavailable…", and permission messages.
+4. **Sheets:** the clipboard fallback textarea (D5/D11), the custom-button form (D13), and
+   toasts for results and errors.
+
+## 4. Protocol
+
+### 4.1 Binary framing
+A binary WebSocket message contains:
+
+`[uint32 big-endian headerLength][header: UTF-8 JSON, headerLength bytes][payload bytes]`
+
+- Server → client: `header.t = "frame"`, and the payload is JPEG.
+- Client → server: `header.t = "image"`, and the payload is image bytes.
+
+Text WebSocket messages are single JSON objects with a `t` field. The optional `id`, a
+client-chosen string, is echoed in `result` and `error`.
+
+### 4.2 Messages
+Client → server:
+```jsonc
+{"t":"auth","secret":"<base64url>","client":"web/0.1"}
+{"t":"windows.list"}
+{"t":"view.start","windowId":1234}
+{"t":"view.stop"}
+{"t":"frame.ack","frameId":57}
+{"t":"pointer","action":"click|doubleClick|rightClick|down|move|up","u":0.42,"v":0.13,"frameId":57}
+{"t":"scroll","u":0.5,"v":0.5,"du":0.0,"dv":-0.03,"frameId":57}
+{"t":"text","text":"こんにちは"}
+{"t":"key","key":"Enter","mods":["cmd","shift"]}
+{"t":"clipboard.set","id":"c1","text":"…","paste":false}
+// binary: header {"t":"image","id":"i1","action":"clipboard|type|none"} + bytes
+```
+Server → client:
+```jsonc
+{"t":"hello","server":"0.1","permissions":{"screenRecording":true,"accessibility":true}}
+{"t":"windows","items":[{"id":1234,"pid":501,"app":"Safari","title":"Docs","w":1280,"h":800}]}
+{"t":"view.state","windowId":1234,"state":"starting|streaming|window_gone|capture_unavailable|stopped","reason":"…"}
+// binary: header {"t":"frame","frameId":57,"windowId":1234,"width":2560,"height":1600,
+//                 "content":{"x":0,"y":0,"w":2560,"h":1600},
+//                 "window":{"x":100,"y":80,"w":1280,"h":800}} + JPEG
+{"t":"result","id":"i1","ok":true,"path":"/var/folders/…/mac-window-remote/uploads/img-….png"}
+{"t":"error","id":"c1","code":"too_large","message":"…"}
+{"t":"ping"}
+```
+Close codes: `4001` auth_failed, `4002` replaced, `4003` protocol_error (first message not
+auth, or auth timeout).
+
+Error codes: `bad_request`, `too_large`, `unsupported_type`, `window_not_found`,
+`stale_coordinates`, `permission_screen_recording`, `permission_accessibility`,
+`internal`.
+
+`pointer`, `scroll`, `text`, and `key` produce no `result` on success, which keeps
+latency low. They produce an `error` on failure. `clipboard.set` and `image` always
+produce a `result` or an `error`.
+
+### 4.3 Key names
+- `Enter, Tab, Escape, Backspace, Delete (forward), Space, ArrowLeft, ArrowRight,
+  ArrowUp, ArrowDown, Home, End, PageUp, PageDown, F1–F12`
+- `a–z, 0–9`
+- `` - = [ ] \ ; ' , . / ` ``, using ANSI virtual key positions
+- Mods: `ctrl, opt, cmd, shift`
+
+Unknown key names are rejected with `bad_request`.
+
+## 5. Mac source components (`mac/Sources/MacWindowRemote/`)
+| File | Responsibility |
+|---|---|
+| `App.swift` | `@main`, `MenuBarExtra`, windows for Pair / Setup / Settings |
+| `Settings.swift` | UserDefaults (port, iPhone URL), `SMAppService` toggle |
+| `PairingSecret.swift` | Keychain get/create/reset, constant-time compare |
+| `Permissions.swift` | preflight/request/open-settings/relaunch |
+| `Server.swift` | Hummingbird app: static files (bundle or `MWR_WEB_ROOT`), `/ws` |
+| `Session.swift` | one active client, auth, message decode/dispatch, replace logic, pings |
+| `Protocol.swift` | Codable messages, binary framing encode/decode |
+| `WindowCatalog.swift` | `SCShareableContent` listing + filtering, CG bounds lookup |
+| `CaptureSession.swift` | `SCStream`, resize polling, JPEG encode, ack flow control, frame header ring |
+| `CoordinateMapper.swift` | pure mapping of (u, v, frame header, current bounds) to a global point or reject |
+| `WindowFocuser.swift` | frontmost check, activate, AX raise/main |
+| `InputInjector.swift` | CGEvent mouse/scroll/text/key, input-source switch, stuck-button release |
+| `KeyMap.swift` | key name to `kVK_*` table |
+| `Clipboard.swift` | NSPasteboard set + ⌘V |
+| `UploadStore.swift` | sniff, size check, save, cleanup timer |
+| `DisplayAssertion.swift` | IOPMAssertion hold/release |
+
+The web client (`web/`) contains `index.html`, `style.css`, `app.js` (state machine,
+socket), `viewer.js` (canvas, transform, gestures), `input.js` (text field, key bar,
+custom buttons), and `manifest.webmanifest`.
+
