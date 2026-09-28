@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mac Window">
+  <title>Mac Window Remote</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <section id="pair" class="screen" hidden>
+    <h1>Pair with your Mac</h1>
+    <p>Scan the QR in the Mac menu bar → <b>Pair iPhone…</b>, or paste the pairing code.</p>
+    <p id="pair-error" class="error" hidden></p>
+    <form id="pair-form">
+      <input id="pair-code" type="text" placeholder="Pairing code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <button type="submit">Pair</button>
+    </form>
+  </section>
+
+  <section id="list" class="screen" hidden>
+    <header class="bar">
+      <h1>Windows</h1>
+      <span class="dot" data-conn></span>
+      <button id="refresh" type="button">Refresh</button>
+    </header>
+    <p id="list-message" class="message" hidden></p>
+    <ul id="windows"></ul>
+  </section>
+
+  <section id="viewer" class="screen" hidden>
+    <div id="stage"><canvas id="canvas"></canvas></div>
+    <header id="viewer-bar" class="bar overlay-bar">
+      <button id="back" type="button">‹ Windows</button>
+      <span id="viewer-title" class="title"></span>
+      <button id="fit" type="button">Fit</button>
+      <span class="dot" data-conn></span>
+    </header>
+    <div id="viewer-overlay" class="overlay" hidden></div>
+    <footer id="bottom-bar">
+      <button id="keyboard" type="button" aria-label="Keyboard">⌨︎</button>
+      <input id="text" type="text" enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type, then Return to send">
+    </footer>
+  </section>
+
+  <div id="toast" hidden></div>
+</body>
+</html>
