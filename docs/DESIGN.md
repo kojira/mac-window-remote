@@ -1,9 +1,8 @@
 # mac-window-remote — Design (v0.2)
 
-Status: **§12 (D32, Tailscale identity instead of pairing) approved by the user.
-Slice 1 implemented (JPEG over WebSocket, absolute taps). Revision 2 (§11)
-replaces the transport with WebRTC and the pointer model with trackpad-style input; it
-is approved and not yet implemented.** Sections marked *Superseded by §11* describe
+Status: **Slice 1 implemented, then replaced by revision 2 (§11: WebRTC video and
+trackpad-style input), which is implemented and awaits acceptance on a real iPhone.
+§12 (D32) replaces pairing with the Mac owner's Tailscale identity.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -1166,6 +1165,31 @@ D27), so the trackpad model can be used now. None of these notes changes the UX 
   requires unit tests for the gesture state machine, which is JavaScript. They use
   Node's built-in `node:test` with no dependencies and no build step
   (`node --test tests/web/*.test.mjs`). Nothing is added to the web client.
+
+### Revision 2 implementation notes (step 2: WebRTC transport)
+Step 2 replaces the JPEG stream with D20–D22 and D27 and moves input to the D28 data
+channels. The interim WebSocket input and the JPEG frames of step 1 are gone.
+
+- **Codec preferences overload.** The Objective-C `setCodecPreferences:error:` and the
+  deprecated non-throwing `setCodecPreferences:` import into Swift under the same name,
+  and Swift picks the deprecated one. It is used as is (it logs and ignores an error),
+  so the build shows one deprecation warning. The answer's H.264-only codec list is the
+  check that it took effect.
+- **Even sizes.** The capture output size is rounded down to even width and height,
+  because 4:2:0 NV12 and the H.264 encoder need them. The long-edge cap of 2560 px (D4)
+  is applied first.
+- **Motion post waiting.** A discrete input waits until no move or scroll post is in
+  progress (step-1 note "Motion ordering"). A finished post is now cleared by whichever
+  waiter sees it first. Before, a waiter awaited the finished post again; that returns at
+  once, so it spun on the actor and every later input stopped (seen as 100 % CPU in the
+  step-2 harness). `InputPipelineTests` guards it.
+- **Verification without the app.** A test-only harness (not committed) ran the real
+  `Server`, `SessionHub`, `RTCHost`, and data channels against headless Chrome, with
+  synthetic NV12 frames in place of ScreenCaptureKit and a proxy adding
+  `Tailscale-User-Login`. H.264 video decoded at 2560×1600; all input kinds reached the
+  backend in order; wrong-channel and invalid messages got `bad_request` on `control`.
+  Real window capture, iOS Safari, and cellular are covered only by §11's acceptance on
+  the device.
 
 ## 12. Access by Tailscale identity (approved by the user; supersedes D6)
 

@@ -2,13 +2,13 @@
 
 View and operate **one Mac window at a time** from an iPhone.
 
-- A resident macOS menu bar app captures a single selected window (ScreenCaptureKit) and injects clicks/keys (CGEvent).
+- A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
 - The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent).
 
 ## Status
 
-**Slice 1 (MVP)**: open the page → pick a window → view → zoom → click → scroll → type. Clipboard text, image upload, and the key bar are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Clipboard text, image upload, and the key bar are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Honest constraints
 
@@ -42,6 +42,8 @@ Development: `MWR_WEB_ROOT=$PWD/web build/MacWindowRemote.app/Contents/MacOS/Mac
 
 Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer.
 
+The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, BSD-style license in `Contents/Resources/WebRTC-LICENSE`); `scripts/build-app.sh` embeds and signs it.
+
 ## Setup
 
 1. Open the app. **Setup & Permissions** opens by itself.
@@ -50,6 +52,12 @@ Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the ge
 4. In Terminal, run the command that Setup shows, once: `tailscale serve --bg http://127.0.0.1:8765`
 5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens; there is no pairing step. To use it from the Home Screen, choose Share → **Add to Home Screen**.
 6. Keep the Mac unlocked while you use it remotely.
+
+If macOS asks whether **MacWindowRemote** may accept incoming network connections, click **Allow**: the video goes directly between the Mac and the iPhone over UDP on the tailnet (WebRTC), not through `tailscale serve`. After a rebuild, macOS may also ask for Screen Recording and Accessibility again; switch the app's entry off and on in System Settings → Privacy & Security.
+
+### Using it on cellular
+
+Turn Tailscale on on both the Mac and the iPhone. No port forwarding and no STUN/TURN server are needed: WebRTC connects over the tailnet addresses, and Tailscale relays traffic itself when it cannot make a direct path (that adds latency). If the video does not start, the page says so and offers **Retry**.
 
 The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every request must come from the Tailscale login that owns this Mac: `tailscale serve` sends it in the `Tailscale-User-Login` header, and the app reads the owner from `tailscale status --json`. Other tailnet users, tagged devices, and direct local requests get "Not allowed: sign in to Tailscale as the Mac owner". To allow a different login, set it in Settings → **Allowed Tailscale login**. The app no longer uses a pairing code or the Keychain; an old Keychain item "mac-window-remote" from earlier builds is not read and can be deleted in Keychain Access.
 
