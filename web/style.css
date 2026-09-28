@@ -32,6 +32,14 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; background: #000; }
 #canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #viewer.dimmed #canvas { opacity: 0.4; }
+/* Cursor overlay (D24): an arrow whose tip is at the Mac cursor. */
+#cursor { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+#cursor::before { content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 20px;
+  background: #fff; clip-path: polygon(0 0, 0 100%, 30% 75%, 55% 100%, 70% 92%, 47% 68%, 100% 68%);
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); }
+#drag-badge { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 64px);
+  background: rgba(10, 132, 255, 0.92); color: #fff; padding: 8px 14px; border-radius: 16px; font-size: 14px;
+  pointer-events: none; }
 .overlay-bar { position: absolute; left: 0; right: 0; top: 0; padding-top: calc(env(safe-area-inset-top) + 6px);
   background: rgba(28, 28, 30, 0.9); transition: transform 0.2s; }
 .overlay-bar.hidden { transform: translateY(-100%); }

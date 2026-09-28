@@ -1,17 +1,23 @@
-// Canvas, zoom/pan transform, and slice 1 gestures (DESIGN.md D7, D14).
+// Canvas, zoom/pan transform, trackpad input, and the cursor overlay (DESIGN.md D23, D24).
+// Frames are JPEG over the WebSocket until the WebRTC video track replaces them (D21).
+import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
+
 const MAX_ZOOM = 8;
-const TAP_MAX_MOVE = 10;
-const TAP_MAX_MS = 400;
-const DOUBLE_TAP_MS = 300;
-const DOUBLE_TAP_PX = 20;
 const BAR_HIDE_MS = 3000;
 const TOP_EDGE_PX = 40;
+/// A thumb-sized swipe covers a useful distance of the window (D24).
+const SENSITIVITY = 1.5;
+
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+const clamp1 = (x) => Math.min(Math.max(x, -1), 1);
 
 export class Viewer {
-  constructor({ stage, canvas, bar, send, canInput }) {
+  constructor({ stage, canvas, cursor, dragBadge, bar, send, canInput }) {
     this.stage = stage;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
+    this.cursorEl = cursor;
+    this.dragBadge = dragBadge;
     this.bar = bar;
     this.send = send;
     this.canInput = canInput;
@@ -19,16 +25,16 @@ export class Viewer {
     this.scale = 1; // CSS px per image px
     this.tx = 0;
     this.ty = 0;
-    this.touch = null;
-    this.lastTap = null;
     this.barTimer = null;
-    this.scrollPending = null;
-    this.decoding = false;
+    this.gestures = new GestureRecognizer();
+    this.longPressTimer = null;
+    this.nextSeq = 1; // never reset, so a late confirmation cannot match a newer move
+    this.resetCursor();
 
-    stage.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: false });
-    stage.addEventListener('touchmove', (e) => this.onTouchMove(e), { passive: false });
-    stage.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: false });
-    stage.addEventListener('touchcancel', () => { this.touch = null; });
+    stage.addEventListener('touchstart', (e) => this.onTouch(e, 'start'), { passive: false });
+    stage.addEventListener('touchmove', (e) => this.onTouch(e, 'move'), { passive: false });
+    stage.addEventListener('touchend', (e) => this.onTouch(e, 'end'), { passive: false });
+    stage.addEventListener('touchcancel', (e) => this.onTouch(e, 'cancel'), { passive: false });
     window.addEventListener('resize', () => this.relayout());
     if (window.visualViewport) window.visualViewport.addEventListener('resize', () => this.relayout());
   }
@@ -65,14 +71,32 @@ export class Viewer {
     this.ctx.drawImage(bitmap, 0, 0);
     if (!hadFrame) this.fit();
     else if (sizeChanged) { this.scale = this.fitScale() * zoom; this.clampAndApply(); }
+    else this.placeCursor();
   }
 
+  /// Leaving the viewer or switching windows: forget the image, the cursor, and any drag.
   clear() {
     this.header = null;
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     this.canvas.width = 0;
     this.canvas.height = 0;
     this.setDimmed(false);
+    this.resetCursor();
+    this.endInput();
+  }
+
+  /// The socket closed: the Mac releases a held button by itself (D26), and the next
+  /// session sends its own cursor, so the old one is forgotten.
+  endInput() {
+    this.cursorBase = null;
+    this.cursorEl.hidden = true;
+    this.gestures.releaseDragLock();
+    this.gestures.touchCancel();
+    clearTimeout(this.longPressTimer);
+    this.dragBadge.hidden = true;
+    this.pendingMove = null;
+    this.pendingScroll = null;
+    this.sentMoves = [];
   }
 
   setDimmed(on) {
@@ -110,23 +134,12 @@ export class Viewer {
     this.tx = iw <= sw ? (sw - iw) / 2 : Math.min(0, Math.max(sw - iw, this.tx));
     this.ty = ih <= sh ? (sh - ih) / 2 : Math.min(0, Math.max(sh - ih, this.ty));
     this.canvas.style.transform = `translate(${this.tx}px, ${this.ty}px) scale(${this.scale})`;
+    this.placeCursor();
   }
 
-  /// Stage point (CSS px) → content-normalized (u, v), or null outside the window content (D7).
-  toNormalized(x, y) {
-    const h = this.header;
-    if (!h) return null;
-    const ix = (x - this.tx) / this.scale;
-    const iy = (y - this.ty) / this.scale;
-    const u = (ix - h.content.x) / h.content.w;
-    const v = (iy - h.content.y) / h.content.h;
-    if (!(u >= 0 && u <= 1 && v >= 0 && v <= 1)) return null;
-    return { u, v };
-  }
-
-  stagePoint(t) {
+  stagePoints(touchList) {
     const r = this.stage.getBoundingClientRect();
-    return { x: t.clientX - r.left, y: t.clientY - r.top };
+    return [...touchList].map((t) => ({ id: t.identifier, x: t.clientX - r.left, y: t.clientY - r.top }));
   }
 
   // ---------- top bar ----------
@@ -137,112 +150,155 @@ export class Viewer {
     this.barTimer = setTimeout(() => this.bar.classList.add('hidden'), BAR_HIDE_MS);
   }
 
-  // ---------- gestures ----------
+  // ---------- gestures (D23) ----------
 
-  onTouchStart(e) {
+  onTouch(e, phase) {
     e.preventDefault();
-    const touches = e.touches;
-    if (touches.length === 1 && !this.touch) {
-      const p = this.stagePoint(touches[0]);
-      this.touch = { mode: 'pending', start: p, last: p, t0: performance.now() };
-    } else if (touches.length === 2) {
-      const a = this.stagePoint(touches[0]);
-      const b = this.stagePoint(touches[1]);
-      this.touch = {
-        mode: 'pinch',
-        d0: Math.hypot(a.x - b.x, a.y - b.y) || 1,
-        mid0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
-        s0: this.scale, tx0: this.tx, ty0: this.ty,
-      };
-    } else if (this.touch) {
-      this.touch.mode = 'done';
+    const now = performance.now();
+    const touches = this.stagePoints(e.touches);
+    let intents;
+    switch (phase) {
+      case 'start':
+        intents = this.gestures.touchStart(touches, now);
+        clearTimeout(this.longPressTimer);
+        if (touches.length === 1) {
+          this.longPressTimer = setTimeout(() => this.handle(this.gestures.tick(performance.now())), LONG_PRESS_MS + 5);
+        }
+        break;
+      case 'move':
+        intents = this.gestures.touchMove(touches, now);
+        break;
+      case 'end':
+        intents = this.gestures.touchEnd(touches, now);
+        if (touches.length === 0) clearTimeout(this.longPressTimer);
+        break;
+      default:
+        this.gestures.touchCancel();
+        clearTimeout(this.longPressTimer);
+        intents = [];
     }
+    this.handle(intents);
   }
 
-  onTouchMove(e) {
-    e.preventDefault();
-    const t = this.touch;
-    if (!t) return;
-    if (t.mode === 'pinch' && e.touches.length >= 2) {
-      const a = this.stagePoint(e.touches[0]);
-      const b = this.stagePoint(e.touches[1]);
-      const d = Math.hypot(a.x - b.x, a.y - b.y);
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      const fit = this.fitScale();
-      const s = Math.min(Math.max(t.s0 * d / t.d0, fit), fit * MAX_ZOOM);
-      // Keep the image point under the initial midpoint under the current midpoint.
-      const ix = (t.mid0.x - t.tx0) / t.s0;
-      const iy = (t.mid0.y - t.ty0) / t.s0;
-      this.scale = s;
-      this.tx = mid.x - ix * s;
-      this.ty = mid.y - iy * s;
-      this.clampAndApply();
-      return;
-    }
-    if (e.touches.length !== 1) return;
-    const p = this.stagePoint(e.touches[0]);
-    if (t.mode === 'pending') {
-      const moved = Math.hypot(p.x - t.start.x, p.y - t.start.y);
-      if (moved > TAP_MAX_MOVE) {
-        // Drags that start before the hold time scroll the window; later ones are slice 4.
-        t.mode = performance.now() - t.t0 < TAP_MAX_MS ? 'scroll' : 'done';
+  handle(intents) {
+    for (const i of intents) {
+      switch (i.type) {
+        case 'move': this.queueMove(i.dx, i.dy); break;
+        case 'scroll': this.queueScroll(i.dx, i.dy); break;
+        case 'click':
+          if (i.y < TOP_EDGE_PX && this.bar.classList.contains('hidden')) { this.showBar(); break; }
+          this.sendInput({ t: 'click' });
+          break;
+        case 'rightClick': this.sendInput({ t: 'rightClick' }); break;
+        case 'dragStart':
+          if (!this.header || !this.canInput()) { this.gestures.releaseDragLock(); break; }
+          if (navigator.vibrate) navigator.vibrate(15);
+          this.dragBadge.hidden = false;
+          this.sendInput({ t: 'drag', state: 'start' });
+          break;
+        case 'dragEnd':
+          this.dragBadge.hidden = true;
+          this.sendInput({ t: 'drag', state: 'end' });
+          break;
+        case 'zoom': this.zoomBy(i); break;
+        case 'pan':
+          this.tx += i.dx;
+          this.ty += i.dy;
+          this.clampAndApply();
+          break;
       }
     }
-    if (t.mode === 'scroll') {
-      this.queueScroll(p.x - t.last.x, p.y - t.last.y, p);
-    }
-    t.last = p;
   }
 
-  onTouchEnd(e) {
-    e.preventDefault();
-    const t = this.touch;
-    if (!t) return;
-    if (e.touches.length > 0) {
-      if (t.mode === 'pinch') t.mode = 'done';
-      return;
-    }
-    this.touch = null;
-    if (t.mode !== 'pending') return;
-    const dt = performance.now() - t.t0;
-    if (dt > TAP_MAX_MS) return;
-    this.onTap(t.start);
-  }
-
-  onTap(p) {
-    if (p.y < TOP_EDGE_PX && this.bar.classList.contains('hidden')) {
-      this.showBar();
-      return;
-    }
-    const n = this.toNormalized(p.x, p.y);
-    if (!n || !this.canInput()) return;
-    const now = performance.now();
-    const prev = this.lastTap;
-    const isDouble = prev && now - prev.t <= DOUBLE_TAP_MS && Math.hypot(p.x - prev.x, p.y - prev.y) <= DOUBLE_TAP_PX;
-    this.lastTap = isDouble ? null : { t: now, x: p.x, y: p.y };
-    this.send({ t: 'pointer', action: isDouble ? 'doubleClick' : 'click', u: n.u, v: n.v, frameId: this.header.frameId });
-  }
-
-  /// One scroll message per animation frame (D14). Deltas are content-normalized.
-  queueScroll(dx, dy, p) {
+  sendInput(msg) {
     if (!this.header || !this.canInput()) return;
-    const h = this.header;
-    const du = dx / this.scale / h.content.w;
-    const dv = dy / this.scale / h.content.h;
-    if (this.scrollPending) {
-      this.scrollPending.du += du;
-      this.scrollPending.dv += dv;
-      this.scrollPending.p = p;
-      return;
+    this.flushMotion();
+    this.send(msg);
+  }
+
+  /// Pinch: zoom by the distance change around the midpoint, and follow the midpoint.
+  zoomBy({ factor, x, y, dx, dy }) {
+    if (!this.header) return;
+    const ix = (x - dx - this.tx) / this.scale;
+    const iy = (y - dy - this.ty) / this.scale;
+    const fit = this.fitScale();
+    this.scale = Math.min(Math.max(this.scale * factor, fit), fit * MAX_ZOOM);
+    this.tx = x - ix * this.scale;
+    this.ty = y - iy * this.scale;
+    this.clampAndApply();
+  }
+
+  // ---------- relative cursor (D24) ----------
+
+  resetCursor() {
+    this.cursorBase = null; // {u, v, seq} as confirmed by the Mac
+    this.sentMoves = []; // [{seq, dx, dy}] sent after cursorBase.seq
+    this.pendingMove = null;
+    this.pendingScroll = null;
+    this.cursorEl.hidden = true;
+  }
+
+  /// Size of the window content on screen, in CSS px at the current zoom.
+  contentCss() {
+    const c = this.header.content;
+    return { w: c.w * this.scale, h: c.h * this.scale };
+  }
+
+  /// At most one `move` per animation frame, carrying the sum since the last send.
+  queueMove(dx, dy) {
+    if (!this.header || !this.canInput() || !this.cursorBase) return;
+    const size = this.contentCss();
+    const du = dx * SENSITIVITY / size.w;
+    const dv = dy * SENSITIVITY / size.h;
+    if (this.pendingMove) { this.pendingMove.dx += du; this.pendingMove.dy += dv; return; }
+    this.pendingMove = { dx: du, dy: dv };
+    requestAnimationFrame(() => this.flushMotion());
+  }
+
+  /// Scroll deltas are normalized like moves, without the sensitivity factor (D26).
+  queueScroll(dx, dy) {
+    if (!this.header || !this.canInput()) return;
+    const size = this.contentCss();
+    if (this.pendingScroll) { this.pendingScroll.du += dx / size.w; this.pendingScroll.dv += dy / size.h; return; }
+    this.pendingScroll = { du: dx / size.w, dv: dy / size.h };
+    requestAnimationFrame(() => this.flushMotion());
+  }
+
+  flushMotion() {
+    const m = this.pendingMove;
+    const s = this.pendingScroll;
+    this.pendingMove = null;
+    this.pendingScroll = null;
+    if (m && this.cursorBase) {
+      const move = { seq: this.nextSeq++, dx: clamp1(m.dx), dy: clamp1(m.dy) };
+      if (this.send({ t: 'move', ...move })) {
+        this.sentMoves.push(move);
+        this.placeCursor();
+      }
     }
-    this.scrollPending = { du, dv, p };
-    requestAnimationFrame(() => {
-      const s = this.scrollPending;
-      this.scrollPending = null;
-      if (!s || !this.header) return;
-      const n = this.toNormalized(s.p.x, s.p.y);
-      if (!n) return;
-      this.send({ t: 'scroll', u: n.u, v: n.v, du: s.du, dv: s.dv, frameId: this.header.frameId });
-    });
+    if (s) this.send({ t: 'scroll', du: clamp1(s.du), dv: clamp1(s.dv) });
+  }
+
+  /// The Mac's confirmed cursor: re-base the prediction on it (D24).
+  onCursor({ u, v, seq }) {
+    this.cursorBase = { u, v, seq };
+    this.sentMoves = this.sentMoves.filter((m) => m.seq > seq);
+    this.placeCursor();
+  }
+
+  predictedCursor() {
+    let { u, v } = this.cursorBase;
+    for (const m of this.sentMoves) { u = clamp01(u + m.dx); v = clamp01(v + m.dy); }
+    return { u, v };
+  }
+
+  placeCursor() {
+    if (!this.cursorBase || !this.header) { this.cursorEl.hidden = true; return; }
+    const { u, v } = this.predictedCursor();
+    const c = this.header.content;
+    const x = this.tx + (c.x + u * c.w) * this.scale;
+    const y = this.ty + (c.y + v * c.h) * this.scale;
+    this.cursorEl.style.transform = `translate(${x}px, ${y}px)`;
+    this.cursorEl.hidden = false;
   }
 }

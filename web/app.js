@@ -190,6 +190,7 @@ function connect() {
     authed = false;
     clearTimeout(deadTimer);
     setConnDots('off');
+    viewer.endInput();
     onClosed(ev.code);
   };
 }
@@ -283,6 +284,9 @@ function onMessage(msg) {
     case 'error':
       onError(msg);
       break;
+    case 'cursor':
+      viewer.onCursor(msg);
+      break;
     case 'ping':
       break;
   }
@@ -312,8 +316,6 @@ function onViewState(msg) {
 
 function onError(msg) {
   switch (msg.code) {
-    case 'stale_coordinates':
-      return; // silent (D18)
     case 'permission_accessibility':
       toast('Mac needs Accessibility permission to control windows.');
       return;
@@ -347,6 +349,8 @@ document.addEventListener('visibilitychange', () => {
 const viewer = new Viewer({
   stage: $('stage'),
   canvas: $('canvas'),
+  cursor: $('cursor'),
+  dragBadge: $('drag-badge'),
   bar: $('viewer-bar'),
   send,
   canInput: () => screen === 'viewer' && authed,
