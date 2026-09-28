@@ -266,3 +266,72 @@ following:
   revisions, which all edit the field before commit. Streaming every keystroke would
   break them.
 
+### D11. Clipboard text (slice 2)
+- The **Clipboard** button calls `navigator.clipboard.readText()` inside the tap handler.
+  On failure it opens the fallback textarea sheet (D5).
+- The sheet and preview show the first 200 characters and have two actions:
+  **Copy to Mac** (`paste: false`) and **Paste into window** (`paste: true`).
+- On the Mac, the app calls `NSPasteboard.general.clearContents()` and
+  `setString(_, forType: .string)`. If `paste` is true, it focuses the window (D8) and
+  sends ⌘V.
+- The previous Mac clipboard is **not** restored, because the user asked to put the text
+  there.
+- The maximum is 1 MiB of UTF-8. Larger text is rejected with `too_large`.
+
+### D12. Image → temp file → path (slice 3)
+- The **Image** button opens `<input type="file" accept="image/*">`. iOS offers the photo
+  library, the camera, and Files. iOS normally converts HEIC to JPEG for web uploads, and
+  whatever arrives is stored as-is.
+- The image is uploaded as one binary WebSocket message (§4.1) with header
+  `{t:"image", id, action}`, where `action` is `clipboard` (the default), `type`, or
+  `none`.
+- **Limits:**
+  - At most **25 MiB** per image. The server's maximum WebSocket frame size is 26 MiB.
+  - The type is sniffed from the magic bytes. PNG, JPEG, HEIC/HEIF, GIF, and WebP are
+    accepted. Anything else is rejected with `unsupported_type`.
+- **Location:** `FileManager.default.temporaryDirectory/mac-window-remote/uploads/`. This
+  is under the per-user `$TMPDIR` (`/var/folders/…`), which only this user can read.
+  The directory is created with mode 0700.
+- **Name:** `img-YYYYMMDD-HHMMSS-<4 hex>.<ext>`. The name has no spaces, so the path
+  never needs quoting.
+- **Action:**
+  - `clipboard`: the path is put on the Mac clipboard as a string.
+  - `type`: the window is focused (D8) and the path is typed (D9).
+  - `none`: nothing more happens.
+  In all cases the server replies with `result {path}`, and the phone shows the path
+  with a toast "Saved: …/img-…png (copied on Mac)".
+- **Cleanup:** at app launch and then every hour, the app deletes files in that
+  directory older than **24 h**. It deletes nothing outside it. The "Open uploads
+  folder" menu item reveals the directory in Finder.
+
+### D13. Key bar and custom buttons (slice 4)
+- The key bar is a horizontally scrollable row above the text field. Defaults:
+  `Esc  Tab  ←  ↑  ↓  →  ⏎  ⌫  ⌃  ⌥  ⌘  ⇧`, then the user's custom buttons, then `＋`.
+- **Modifiers are one-shot:**
+  - Tapping ⌃⌥⌘⇧ arms the modifier, and it is highlighted.
+  - The next key-bar key, or the next committed text of **exactly one character** from
+    `[a-z0-9]` or the ANSI punctuation in §4.3, is sent as `key` with the armed
+    modifiers. Then the modifiers are disarmed.
+  - Any other text is sent as plain `text`, and the modifiers are disarmed.
+  - A long press on a modifier locks it until tapped again.
+- **Custom buttons:**
+  - Each button is `{label, key, mods[]}`, stored in the phone's `localStorage`
+    (`mwr.buttons`). They are not synced to the Mac.
+  - `＋` opens a small form: a label, a key picker (keys in §4.3), and modifier
+    checkboxes.
+  - Long-pressing a custom button offers Edit and Delete.
+- **Pointer extras** are also in this slice: long-press and release is a right-click, and
+  long-press then move is a left-button drag (D14).
+
+### D14. Viewer gestures (the canvas uses `touch-action: none`, so all gestures are custom)
+| Gesture | Effect | Slice |
+|---|---|---|
+| 2-finger pinch / pan | Zoom (1× = fit to screen, up to 8×) and pan the view on the phone only | 1 |
+| 1-finger tap | Left click at the point | 1 |
+| 2nd tap within 300 ms and 20 px | Double-click (sent as `pointer doubleClick`) | 1 |
+| 1-finger drag, starting before 400 ms | Scroll the window (`scroll`, throttled to one message per animation frame) | 1 |
+| 1-finger hold 400 ms, then release without moving | Right-click | 4 |
+| 1-finger hold 400 ms, then move | Left-button drag (`pointer down/move/up`) | 4 |
+
+A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom and pan.
+
