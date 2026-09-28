@@ -12,8 +12,12 @@ protocol SessionBackend: Sendable {
     func listWindows() async throws -> [WindowItem]
     /// Starts capturing a window. Events are delivered through `events`.
     func startCapture(windowId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> CaptureStart
-    /// Performs one input action in order. Returns an error code on failure.
-    func perform(_ job: InputJob) async -> ErrorCode?
+    /// Posts one input (D26). Returns an error code on failure.
+    func perform(_ action: InputAction) async -> ErrorCode?
+    /// Brings the window to the front once if it is not frontmost (D25).
+    func focus(windowId: UInt32) async
+    /// Posts `leftMouseUp` if a drag holds the button (D26).
+    func releaseButton() async
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
 }
@@ -33,21 +37,6 @@ enum CaptureStart {
 protocol CaptureHandle: AnyObject, Sendable {
     func ack(frameId: Int)
     func stop()
-}
-
-struct InputJob: Sendable {
-    enum Kind: Sendable {
-        case pointer(PointerAction, u: Double, v: Double)
-        case scroll(u: Double, v: Double, du: Double, dv: Double)
-        case text(String)
-        case key(String)
-    }
-    let windowId: UInt32
-    /// Window frame (points) from the header of the frame the user saw (D7).
-    let frameWindow: Rect?
-    let kind: Kind
-    /// When the message arrived, to log queueing plus posting latency.
-    var received = ContinuousClock.now
 }
 
 /// Connection state shown in the menu bar.
@@ -146,6 +135,11 @@ actor SessionHub {
     }
 }
 
+/// Lets the input pipeline, created in `Session.init`, call back into its session.
+private final class WeakSession: @unchecked Sendable {
+    weak var session: Session?
+}
+
 /// One authenticated client connection.
 actor Session {
     private weak var hub: SessionHub?
@@ -156,16 +150,12 @@ actor Session {
     // Viewing state
     private var viewingWindowId: UInt32?
     private var capture: (any CaptureHandle)?
-    private var recentFrames: [FrameHeader] = []
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
 
-    // Input runs in order on one consumer (D9).
-    private let inputJobs: AsyncStream<InputJob>
-    private let inputContinuation: AsyncStream<InputJob>.Continuation
-    private var inputTask: Task<Void, Never>?
+    // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
+    private let input: InputPipeline
 
-    static let frameHistory = 16
     static let captureRetryInterval: Duration = .seconds(5)
     static let pingInterval: Duration = .seconds(10)
 
@@ -173,7 +163,12 @@ actor Session {
         self.hub = hub
         self.backend = backend
         self.outbound = outbound
-        (inputJobs, inputContinuation) = AsyncStream.makeStream(of: InputJob.self)
+        let ref = WeakSession()
+        input = InputPipeline(
+            backend: backend,
+            onError: { code in await ref.session?.reportInputError(code) },
+            onCursor: { cursor, seq in await ref.session?.send(.cursor(u: cursor.u, v: cursor.v, seq: seq)) })
+        ref.session = self
     }
 
     func run(_ iterator: inout WebSocketInboundMessageStream.AsyncIterator) async {
@@ -184,8 +179,12 @@ actor Session {
             guard let message else { break }
             switch message {
             case .text(let text):
+                let data = Data(text.utf8)
                 do {
-                    await handle(try ClientMessage.decode(Data(text.utf8)))
+                    await handle(try ClientMessage.decode(data))
+                } catch where ClientMessage.isMotion(data) {
+                    // Invalid motion is dropped silently (D28).
+                    log.debug("motion dropped: \(String(describing: error), privacy: .public)")
                 } catch {
                     log.info("bad request: \(String(describing: error), privacy: .public)")
                     await send(.error(code: .badRequest, message: "Bad request"))
@@ -198,15 +197,6 @@ actor Session {
     }
 
     private func startBackgroundTasks() {
-        let jobs = inputJobs
-        let backend = backend
-        inputTask = Task { [weak self] in
-            for await job in jobs {
-                if let code = await backend.perform(job) {
-                    await self?.reportInputError(code)
-                }
-            }
-        }
         pingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: Session.pingInterval)
@@ -220,7 +210,6 @@ actor Session {
         let message: String
         switch code {
         case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
-        case .staleCoordinates: message = "The window moved; try again."
         case .windowNotFound: message = "Window not found"
         default: message = "Input failed"
         }
@@ -249,35 +238,33 @@ actor Session {
             stopViewing()
             if let id = viewingWindowId { await send(.viewState(windowId: id, state: .stopped, reason: nil)) }
             viewingWindowId = nil
+            await input.setTarget(nil)
         case .frameAck(let frameId):
             capture?.ack(frameId: frameId)
-        case .pointer(let action, let u, let v, let frameId):
-            enqueueInput(.pointer(action, u: u, v: v), frameId: frameId)
-        case .scroll(let u, let v, let du, let dv, let frameId):
-            enqueueInput(.scroll(u: u, v: v, du: du, dv: dv), frameId: frameId)
+        case .move(let seq, let dx, let dy):
+            await input.submitMove(seq: seq, dx: dx, dy: dy)
+        case .scroll(let du, let dv):
+            await input.submitScroll(du: du, dv: dv)
+        case .click:
+            await input.submit(.click)
+        case .rightClick:
+            await input.submit(.rightClick)
+        case .drag(let start):
+            await input.submit(start ? .dragStart : .dragEnd)
         case .text(let text):
-            enqueueInput(.text(text), frameId: nil)
+            await input.submit(.text(text))
         case .key(let name):
-            enqueueInput(.key(name), frameId: nil)
+            await input.submit(.key(name))
         }
-    }
-
-    private func enqueueInput(_ kind: InputJob.Kind, frameId: Int?) {
-        guard let windowId = viewingWindowId else {
-            log.info("input dropped kind=\(kind.logName, privacy: .public) reason=not_viewing")
-            return
-        }
-        let seen = frameId.flatMap { id in recentFrames.last { $0.frameId == id } }
-        let header = seen ?? recentFrames.last
-        log.debug("input received kind=\(kind.logName, privacy: .public) frameMatched=\(seen != nil, privacy: .public) hasFrame=\(header != nil, privacy: .public)")
-        inputContinuation.yield(InputJob(windowId: windowId, frameWindow: header?.window, kind: kind))
     }
 
     // MARK: Capture
 
     private func startViewing(_ windowId: UInt32) async {
-        // A new view.start while already viewing stops the old stream first (D18).
+        // A new view.start while already viewing stops the old stream first (D18), and a
+        // window change releases a held button (D26).
         stopViewing()
+        if viewingWindowId != windowId { await input.setTarget(nil) }
         viewingWindowId = windowId
         guard backend.permissions().screenRecording else {
             await send(.viewState(windowId: windowId, state: .captureUnavailable, reason: "permission_screen_recording"))
@@ -295,10 +282,12 @@ actor Session {
         case .started(let handle, let window):
             capture = handle
             backend.viewingChanged(window)
+            await input.setTarget(windowId)
             await hub?.statusChanged(self, .viewing(app: window.app, title: window.title))
             await send(.viewState(windowId: windowId, state: .streaming, reason: nil))
         case .windowGone:
             viewingWindowId = nil
+            await input.setTarget(nil)
             await send(.viewState(windowId: windowId, state: .windowGone, reason: nil))
         case .unavailable(let reason):
             await send(.viewState(windowId: windowId, state: .captureUnavailable, reason: reason))
@@ -310,12 +299,11 @@ actor Session {
         guard viewingWindowId == windowId, !closed else { return }
         switch event {
         case .frame(let header, let jpeg):
-            recentFrames.append(header)
-            if recentFrames.count > Self.frameHistory { recentFrames.removeFirst() }
             await sendFrame(header, jpeg)
         case .windowGone:
             stopViewing()
             viewingWindowId = nil
+            await input.setTarget(nil)
             await send(.viewState(windowId: windowId, state: .windowGone, reason: nil))
         case .streamStopped:
             stopViewing()
@@ -348,7 +336,6 @@ actor Session {
             backend.viewingChanged(nil)
             Task { await hub?.statusChanged(self, .connected) }
         }
-        recentFrames.removeAll()
     }
 
     // MARK: Output
@@ -371,13 +358,12 @@ actor Session {
         closed = true
     }
 
-    /// Disconnect stops capture and pending input (D18).
-    func teardown() {
+    /// Disconnect stops capture and pending input, and releases a held button (D18, D26).
+    func teardown() async {
         closed = true
         stopViewing()
         viewingWindowId = nil
         pingTask?.cancel()
-        inputContinuation.finish()
-        inputTask?.cancel()
+        await input.shutdown()
     }
 }

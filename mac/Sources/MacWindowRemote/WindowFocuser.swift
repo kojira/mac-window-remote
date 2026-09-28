@@ -1,31 +1,20 @@
 import AppKit
 import ApplicationServices
 
-/// Brings the target window to the front before input (DESIGN.md D8). No private APIs.
+/// Brings the target window to the front (DESIGN.md D8 steps 1–3, D25). No private APIs.
+/// It raises at most once per call and never polls or waits.
 enum WindowFocuser {
-    static let pollInterval: UInt64 = 20_000_000
-    static let maxWait: UInt64 = 300_000_000
-
     enum Outcome: String {
         case alreadyFront = "already_front"
         case raised
-        case timedOut = "timed_out"
     }
 
     @discardableResult
-    static func focus(windowId: UInt32, pid: pid_t, bounds: CGRect) async -> Outcome {
+    static func focus(windowId: UInt32, pid: pid_t, bounds: CGRect) -> Outcome {
         if WindowCatalog.frontmostWindowId() == windowId { return .alreadyFront }
-
         NSRunningApplication(processIdentifier: pid)?.activate()
         raise(pid: pid, bounds: bounds, title: WindowCatalog.windowName(windowId))
-
-        var waited: UInt64 = 0
-        while waited < maxWait {
-            try? await Task.sleep(nanoseconds: pollInterval)
-            waited += pollInterval
-            if WindowCatalog.frontmostWindowId() == windowId { return .raised }
-        }
-        return .timedOut
+        return .raised
     }
 
     private static func raise(pid: pid_t, bounds: CGRect, title: String?) {

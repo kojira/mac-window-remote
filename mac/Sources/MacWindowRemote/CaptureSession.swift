@@ -51,7 +51,8 @@ final class CaptureSession: NSObject, CaptureHandle, SCStreamOutput, SCStreamDel
         let px = Self.outputPixelSize(points: size, scale: CGFloat(filter.pointPixelScale))
         config.width = px.width
         config.height = px.height
-        config.showsCursor = true
+        // The phone draws its own cursor overlay (D21, D24).
+        config.showsCursor = false
         config.ignoreShadowsSingleWindow = true
         config.minimumFrameInterval = CMTime(value: 1, timescale: 15)
         config.queueDepth = 5

@@ -14,7 +14,9 @@ private final class FakeBackend: SessionBackend {
     func startCapture(windowId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> CaptureStart {
         .windowGone
     }
-    func perform(_ job: InputJob) async -> ErrorCode? { nil }
+    func perform(_ action: InputAction) async -> ErrorCode? { nil }
+    func focus(windowId: UInt32) async {}
+    func releaseButton() async {}
     func viewingChanged(_ window: WindowItem?) {}
 }
 

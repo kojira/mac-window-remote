@@ -1,7 +1,8 @@
 import Foundation
 
-// Wire protocol (DESIGN.md §4). Text messages are single JSON objects with a `t` field.
-// Binary messages are `[uint32 BE headerLength][JSON header][payload]` (§4.1).
+// Wire protocol (DESIGN.md §4, amended by D28). Text messages are single JSON objects with a
+// `t` field. Binary messages are `[uint32 BE headerLength][JSON header][payload]` (§4.1).
+// Until the WebRTC data channels exist, the D28 input messages travel on the WebSocket.
 
 enum CloseCode {
     static let authFailed: UInt16 = 4001
@@ -14,7 +15,6 @@ enum ErrorCode: String, Codable {
     case tooLarge = "too_large"
     case unsupportedType = "unsupported_type"
     case windowNotFound = "window_not_found"
-    case staleCoordinates = "stale_coordinates"
     case permissionScreenRecording = "permission_screen_recording"
     case permissionAccessibility = "permission_accessibility"
     case `internal` = "internal"
@@ -29,19 +29,19 @@ struct Rect: Codable, Equatable {
 
 // MARK: Client → server
 
-enum PointerAction: String {
-    case click
-    case doubleClick
-}
-
 enum ClientMessage: Equatable {
     case auth(secret: String)
     case windowsList
     case viewStart(windowId: UInt32)
     case viewStop
     case frameAck(frameId: Int)
-    case pointer(action: PointerAction, u: Double, v: Double, frameId: Int?)
-    case scroll(u: Double, v: Double, du: Double, dv: Double, frameId: Int?)
+    /// Relative cursor move in window-normalized units (D24).
+    case move(seq: Int, dx: Double, dy: Double)
+    /// Scroll in window-normalized units (D26).
+    case scroll(du: Double, dv: Double)
+    case click
+    case rightClick
+    case drag(start: Bool)
     case text(String)
     case key(name: String)
 }
@@ -58,11 +58,12 @@ extension ClientMessage {
         let secret: String?
         let windowId: UInt32?
         let frameId: Int?
-        let action: String?
-        let u: Double?
-        let v: Double?
+        let seq: Int?
+        let dx: Double?
+        let dy: Double?
         let du: Double?
         let dv: Double?
+        let state: String?
         let text: String?
         let key: String?
         let mods: [String]?
@@ -79,14 +80,10 @@ extension ClientMessage {
             guard let value else { throw ProtocolError.invalidValue(name) }
             return value
         }
-        func unit(_ value: Double?, _ name: String) throws -> Double {
-            let x = try require(value, name)
-            guard x.isFinite, x >= 0, x <= 1 else { throw ProtocolError.invalidValue(name) }
-            return x
-        }
+        // D28: deltas are finite and within [-1, 1].
         func delta(_ value: Double?, _ name: String) throws -> Double {
             let x = try require(value, name)
-            guard x.isFinite, abs(x) <= 10 else { throw ProtocolError.invalidValue(name) }
+            guard x.isFinite, abs(x) <= 1 else { throw ProtocolError.invalidValue(name) }
             return x
         }
         switch e.t {
@@ -100,16 +97,22 @@ extension ClientMessage {
             return .viewStop
         case "frame.ack":
             return .frameAck(frameId: try require(e.frameId, "frameId"))
-        case "pointer":
-            guard let action = PointerAction(rawValue: try require(e.action, "action")) else {
-                throw ProtocolError.invalidValue("action")
-            }
-            return .pointer(action: action, u: try unit(e.u, "u"), v: try unit(e.v, "v"), frameId: e.frameId)
+        case "move":
+            let seq = try require(e.seq, "seq")
+            guard seq >= 0 else { throw ProtocolError.invalidValue("seq") }
+            return .move(seq: seq, dx: try delta(e.dx, "dx"), dy: try delta(e.dy, "dy"))
         case "scroll":
-            return .scroll(
-                u: try unit(e.u, "u"), v: try unit(e.v, "v"),
-                du: try delta(e.du, "du"), dv: try delta(e.dv, "dv"),
-                frameId: e.frameId)
+            return .scroll(du: try delta(e.du, "du"), dv: try delta(e.dv, "dv"))
+        case "click":
+            return .click
+        case "rightClick":
+            return .rightClick
+        case "drag":
+            switch try require(e.state, "state") {
+            case "start": return .drag(start: true)
+            case "end": return .drag(start: false)
+            default: throw ProtocolError.invalidValue("state")
+            }
         case "text":
             return .text(try require(e.text, "text"))
         case "key":
@@ -121,6 +124,14 @@ extension ClientMessage {
         default:
             throw ProtocolError.unknownType(e.t)
         }
+    }
+
+    /// Message types that the D22 `motion` channel carries: invalid ones are dropped silently
+    /// instead of answered with `bad_request` (D28).
+    static func isMotion(_ data: Data) -> Bool {
+        struct TypeOnly: Decodable { let t: String }
+        guard let t = try? JSONDecoder().decode(TypeOnly.self, from: data).t else { return false }
+        return t == "move" || t == "scroll"
     }
 }
 
@@ -153,6 +164,8 @@ enum ServerMessage {
     case viewState(windowId: UInt32, state: ViewState, reason: String?)
     case error(code: ErrorCode, message: String, id: String? = nil)
     case ping
+    /// Server-confirmed cursor position (D24); `seq` is the highest applied `move.seq`.
+    case cursor(u: Double, v: Double, seq: Int)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -161,6 +174,7 @@ enum ServerMessage {
     }
     private struct Failure: Encodable { let t = "error"; let id: String?; let code: ErrorCode; let message: String }
     private struct Ping: Encodable { let t = "ping" }
+    private struct Cursor: Encodable { let t = "cursor"; let u: Double; let v: Double; let seq: Int }
 
     func jsonString() -> String {
         let encoder = JSONEncoder()
@@ -173,6 +187,7 @@ enum ServerMessage {
         case .error(let code, let message, let id):
             data = try? encoder.encode(Failure(id: id, code: code, message: message))
         case .ping: data = try? encoder.encode(Ping())
+        case .cursor(let u, let v, let seq): data = try? encoder.encode(Cursor(u: u, v: v, seq: seq))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

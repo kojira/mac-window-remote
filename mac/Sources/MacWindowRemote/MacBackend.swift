@@ -50,62 +50,75 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return viewing?.id == windowId ? viewing?.pid : nil
     }
 
-    func perform(_ job: InputJob) async -> ErrorCode? {
+    /// Time for the window server to put a just-raised window in front before the first
+    /// click (D25). The only focus-related delay.
+    static let clickAfterRaise: Duration = .milliseconds(80)
+
+    func focus(windowId: UInt32) async {
+        guard Permissions.accessibility,
+              let bounds = WindowCatalog.currentBounds(windowId), let pid = pid(for: windowId) else { return }
+        let outcome = WindowFocuser.focus(windowId: windowId, pid: pid, bounds: bounds)
+        log.info("focus id=\(windowId, privacy: .public) outcome=\(outcome.rawValue, privacy: .public) reason=view_start")
+    }
+
+    func releaseButton() async {
+        await InputInjector.releaseButton()
+    }
+
+    private var clickCounter = ClickCounter()
+
+    func perform(_ action: InputAction) async -> ErrorCode? {
         let started = ContinuousClock.now
-        let kind = job.kind.logName
+        let kind = action.kind.logName
         guard Permissions.accessibility else {
             log.info("input rejected kind=\(kind, privacy: .public) reason=permission_accessibility")
             return .permissionAccessibility
         }
-        guard let bounds = WindowCatalog.currentBounds(job.windowId), let pid = pid(for: job.windowId) else {
+        guard let bounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
             log.info("input rejected kind=\(kind, privacy: .public) reason=window_not_found")
             return .windowNotFound
         }
-        // Resolve the target point before focusing, so a stale tap clicks nothing.
-        var point: CGPoint?
-        switch job.kind {
-        case .pointer(_, let u, let v), .scroll(let u, let v, _, _):
-            guard let frameWindow = job.frameWindow,
-                  let p = CoordinateMapper.globalPoint(u: u, v: v, frameWindow: frameWindow, currentBounds: bounds)
-            else {
-                log.info("input rejected kind=\(kind, privacy: .public) reason=stale_coordinates hasFrame=\(job.frameWindow != nil, privacy: .public)")
-                return .staleCoordinates
-            }
-            point = p
-            // Window-relative points only.
-            log.debug("input mapped kind=\(kind, privacy: .public) rel=(\(Int(p.x - bounds.minX), privacy: .public),\(Int(p.y - bounds.minY), privacy: .public)) window=\(Int(bounds.width), privacy: .public)x\(Int(bounds.height), privacy: .public)")
-        case .text, .key:
-            break
+        let p = action.cursor.globalPoint(in: bounds)
+        if case .move = action.kind {
+            // A plain cursor move never needs focus (D25).
+            await InputInjector.move(to: p)
+            return nil
         }
-        let focusStarted = ContinuousClock.now
-        let focus = await WindowFocuser.focus(windowId: job.windowId, pid: pid, bounds: bounds)
-        let focusTime = ContinuousClock.now - focusStarted
-        switch job.kind {
-        case .pointer(let action, _, _):
-            await InputInjector.click(at: point!, count: action == .doubleClick ? 2 : 1)
-        case .scroll(_, _, let du, let dv):
-            let d = CoordinateMapper.scrollDelta(du: du, dv: dv, frameWindow: job.frameWindow!)
-            await InputInjector.scroll(at: point!, dx: d.dx, dy: d.dy)
+        // Everything else needs the window in front: raise once if it is not (D25).
+        var focus = WindowFocuser.Outcome.alreadyFront
+        if case .dragEnd = action.kind {} else {
+            focus = WindowFocuser.focus(windowId: action.windowId, pid: pid, bounds: bounds)
+        }
+        switch action.kind {
+        case .move:
+            break
+        case .click, .rightClick, .dragStart:
+            if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+            switch action.kind {
+            case .click:
+                let count = clickCounter.register(at: p, time: ProcessInfo.processInfo.systemUptime,
+                                                  interval: NSEvent.doubleClickInterval)
+                await InputInjector.click(at: p, clickState: count)
+            case .rightClick:
+                clickCounter.reset()
+                await InputInjector.rightClick(at: p)
+            default:
+                clickCounter.reset()
+                await InputInjector.dragStart(at: p)
+            }
+        case .dragEnd:
+            await InputInjector.dragEnd(at: p)
+        case .scroll(let du, let dv):
+            await InputInjector.scroll(at: p, dx: du * bounds.width, dy: dv * bounds.height)
         case .text(let text):
             await InputInjector.type(text)
         case .key(let name):
             await InputInjector.key(name)
         }
+        if case .scroll = action.kind { return nil }
         let total = ContinuousClock.now - started
-        log.info("input posted kind=\(kind, privacy: .public) focus=\(focus.rawValue, privacy: .public) focusMs=\(focusTime.milliseconds, privacy: .public) performMs=\(total.milliseconds, privacy: .public) sinceReceiptMs=\((ContinuousClock.now - job.received).milliseconds, privacy: .public)")
+        log.info("input posted kind=\(kind, privacy: .public) focus=\(focus.rawValue, privacy: .public) performMs=\(total.milliseconds, privacy: .public) sinceReceiptMs=\((ContinuousClock.now - action.received).milliseconds, privacy: .public)")
         return nil
-    }
-}
-
-extension InputJob.Kind {
-    /// Log label; never includes typed text.
-    var logName: String {
-        switch self {
-        case .pointer(let action, _, _): return "pointer.\(action.rawValue)"
-        case .scroll: return "scroll"
-        case .text: return "text"
-        case .key: return "key"
-        }
     }
 }
 

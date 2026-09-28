@@ -28,25 +28,53 @@ import Testing
         try ClientMessage.decode(Data(json.utf8))
     }
 
-    @Test func decodesSliceOneMessages() throws {
+    @Test func decodesMessages() throws {
         #expect(try decode(#"{"t":"auth","secret":"abc","client":"web/0.1"}"#) == .auth(secret: "abc"))
         #expect(try decode(#"{"t":"windows.list"}"#) == .windowsList)
         #expect(try decode(#"{"t":"view.start","windowId":1234}"#) == .viewStart(windowId: 1234))
         #expect(try decode(#"{"t":"frame.ack","frameId":57}"#) == .frameAck(frameId: 57))
-        #expect(try decode(#"{"t":"pointer","action":"doubleClick","u":0.42,"v":0.13,"frameId":57}"#)
-                == .pointer(action: .doubleClick, u: 0.42, v: 0.13, frameId: 57))
-        #expect(try decode(#"{"t":"scroll","u":0.5,"v":0.5,"du":0.0,"dv":-0.03,"frameId":57}"#)
-                == .scroll(u: 0.5, v: 0.5, du: 0, dv: -0.03, frameId: 57))
         #expect(try decode(#"{"t":"text","text":"日本語"}"#) == .text("日本語"))
         #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace"))
+    }
+
+    /// D28 input messages.
+    @Test func decodesTrackpadInput() throws {
+        #expect(try decode(#"{"t":"move","seq":812,"dx":0.0123,"dy":-0.004}"#) == .move(seq: 812, dx: 0.0123, dy: -0.004))
+        #expect(try decode(#"{"t":"scroll","du":0.0,"dv":-0.03}"#) == .scroll(du: 0, dv: -0.03))
+        #expect(try decode(#"{"t":"click"}"#) == .click)
+        #expect(try decode(#"{"t":"rightClick"}"#) == .rightClick)
+        #expect(try decode(#"{"t":"drag","state":"start"}"#) == .drag(start: true))
+        #expect(try decode(#"{"t":"drag","state":"end"}"#) == .drag(start: false))
+        #expect(try decode(#"{"t":"move","seq":0,"dx":1,"dy":-1}"#) == .move(seq: 0, dx: 1, dy: -1))
     }
 
     @Test func rejectsInvalidMessages() {
         #expect(throws: ProtocolError.malformed) { try decode("not json") }
         #expect(throws: ProtocolError.unknownType("nope")) { try decode(#"{"t":"nope"}"#) }
-        #expect(throws: ProtocolError.invalidValue("u")) { try decode(#"{"t":"pointer","action":"click","u":1.5,"v":0.1}"#) }
-        #expect(throws: ProtocolError.invalidValue("action")) { try decode(#"{"t":"pointer","action":"hover","u":0.5,"v":0.1}"#) }
+        #expect(throws: ProtocolError.unknownType("pointer")) { try decode(#"{"t":"pointer","action":"click","u":0.5,"v":0.1}"#) }
         #expect(throws: ProtocolError.invalidValue("key")) { try decode(#"{"t":"key","key":"Launch"}"#) }
         #expect(throws: ProtocolError.invalidValue("windowId")) { try decode(#"{"t":"view.start"}"#) }
+        #expect(throws: ProtocolError.invalidValue("state")) { try decode(#"{"t":"drag","state":"middle"}"#) }
+        #expect(throws: ProtocolError.invalidValue("state")) { try decode(#"{"t":"drag"}"#) }
+    }
+
+    /// D28: deltas must be finite and within [-1, 1]; seq is a non-negative integer.
+    @Test func rejectsOutOfRangeDeltas() {
+        #expect(throws: ProtocolError.invalidValue("dx")) { try decode(#"{"t":"move","seq":1,"dx":1.5,"dy":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("dy")) { try decode(#"{"t":"move","seq":1,"dx":0,"dy":-1.01}"#) }
+        #expect(throws: ProtocolError.invalidValue("dx")) { try decode(#"{"t":"move","seq":1,"dy":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("seq")) { try decode(#"{"t":"move","seq":-1,"dx":0,"dy":0}"#) }
+        #expect(throws: ProtocolError.malformed) { try decode(#"{"t":"move","seq":1.5,"dx":0,"dy":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("du")) { try decode(#"{"t":"scroll","du":2,"dv":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("dv")) { try decode(#"{"t":"scroll","du":0,"dv":-3}"#) }
+        // JSON has no NaN/Infinity literal; a huge exponent overflows to a non-finite or is rejected.
+        #expect(throws: (any Error).self) { try decode(#"{"t":"scroll","du":1e400,"dv":0}"#) }
+    }
+
+    @Test func motionMessagesAreRecognizedForSilentDrop() {
+        #expect(ClientMessage.isMotion(Data(#"{"t":"move","seq":1,"dx":9,"dy":0}"#.utf8)))
+        #expect(ClientMessage.isMotion(Data(#"{"t":"scroll"}"#.utf8)))
+        #expect(!ClientMessage.isMotion(Data(#"{"t":"click"}"#.utf8)))
+        #expect(!ClientMessage.isMotion(Data("junk".utf8)))
     }
 }

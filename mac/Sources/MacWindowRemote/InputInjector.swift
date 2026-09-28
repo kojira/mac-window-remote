@@ -2,8 +2,8 @@ import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 
-/// Posts CGEvents for slice 1 input: click, double-click, scroll, Unicode text, Return/Backspace
-/// (DESIGN.md D9). Callers serialize calls (one input consumer per session).
+/// Posts CGEvents at the Mac-owned cursor (DESIGN.md D9, amended by D26). Callers serialize
+/// discrete inputs; motion may interleave between them.
 /// Runs on the main actor because the Text Input Source APIs require the main thread.
 @MainActor
 enum InputInjector {
@@ -14,21 +14,60 @@ enum InputInjector {
     private static var source: CGEventSource? { CGEventSource(stateID: .hidSystemState) }
     private static let tap = CGEventTapLocation.cghidEventTap
 
-    static func click(at p: CGPoint, count: Int) {
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: tap)
-        for n in 1...count {
-            for type in [CGEventType.leftMouseDown, .leftMouseUp] {
-                let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
-                e?.setIntegerValueField(.mouseEventClickState, value: Int64(n))
-                e?.post(tap: tap)
-            }
-        }
+    /// Whether a drag holds the left button (D26).
+    private(set) static var leftButtonHeld = false
+    private static var lastPoint: CGPoint?
+
+    private static func mouse(_ type: CGEventType, at p: CGPoint, button: CGMouseButton = .left, clickState: Int = 1) {
+        let e = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: p, mouseButton: button)
+        e?.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        e?.post(tap: tap)
+        lastPoint = p
+    }
+
+    /// `mouseMoved`, or `leftMouseDragged` while a drag holds the button.
+    static func move(to p: CGPoint) {
+        mouse(leftButtonHeld ? .leftMouseDragged : .mouseMoved, at: p)
+    }
+
+    /// `clickState` is 2 or 3 for quick successive clicks at one place (D26).
+    static func click(at p: CGPoint, clickState: Int) {
+        move(to: p)
+        mouse(.leftMouseDown, at: p, clickState: clickState)
+        mouse(.leftMouseUp, at: p, clickState: clickState)
+    }
+
+    static func rightClick(at p: CGPoint) {
+        move(to: p)
+        mouse(.rightMouseDown, at: p, button: .right)
+        mouse(.rightMouseUp, at: p, button: .right)
+    }
+
+    static func dragStart(at p: CGPoint) {
+        guard !leftButtonHeld else { return }
+        move(to: p)
+        mouse(.leftMouseDown, at: p)
+        leftButtonHeld = true
+    }
+
+    static func dragEnd(at p: CGPoint) {
+        guard leftButtonHeld else { return }
+        move(to: p)
+        mouse(.leftMouseUp, at: p)
+        leftButtonHeld = false
+    }
+
+    /// Releases a held button at the last posted point, so it is never left stuck (D26).
+    static func releaseButton() {
+        guard leftButtonHeld, let p = lastPoint else { leftButtonHeld = false; return }
+        mouse(.leftMouseUp, at: p)
+        leftButtonHeld = false
     }
 
     /// Deltas in points of finger movement. Content follows the finger: a positive wheel value
     /// moves content down, the same direction as a finger moving down (positive dy).
     static func scroll(at p: CGPoint, dx: Double, dy: Double) {
-        CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: tap)
+        move(to: p)
         let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                         wheel1: Int32(dy.rounded()), wheel2: Int32(dx.rounded()), wheel3: 0)
         e?.location = p
