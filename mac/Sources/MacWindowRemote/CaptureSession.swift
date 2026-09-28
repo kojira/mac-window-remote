@@ -63,8 +63,10 @@ final class CaptureSession: NSObject, CaptureHandle, SCStreamOutput, SCStreamDel
         let stream = SCStream(filter: filter, configuration: configuration(for: configuredSize), delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         try await stream.startCapture()
-        self.stream = stream
-        queue.async { self.startBoundsPolling() }
+        queue.async {
+            self.stream = stream
+            self.startBoundsPolling()
+        }
     }
 
     func stop() {

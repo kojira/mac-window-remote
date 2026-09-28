@@ -25,8 +25,8 @@ enum InputInjector {
         }
     }
 
-    /// Deltas in points. "Natural" direction: content follows the finger, so a finger moving
-    /// up (negative dy) scrolls the content up, which is a negative wheel value.
+    /// Deltas in points of finger movement. Content follows the finger: a positive wheel value
+    /// moves content down, the same direction as a finger moving down (positive dy).
     static func scroll(at p: CGPoint, dx: Double, dy: Double) {
         CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: tap)
         let e = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,

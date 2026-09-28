@@ -83,6 +83,8 @@ actor SessionHub {
         if let previous {
             log.info("session replaced")
             await previous.close(code: CloseCode.replaced, reason: "replaced")
+            // Stop its capture now, so it cannot release state the new session sets up.
+            await previous.teardown()
         }
     }
 
@@ -104,6 +106,7 @@ actor SessionHub {
             active = nil
             onStatus(.idle)
             await current.close(code: CloseCode.authFailed, reason: "auth_failed")
+            await current.teardown()
         }
     }
 
