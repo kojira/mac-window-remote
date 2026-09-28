@@ -662,3 +662,37 @@ All acceptance checks run on a real iPhone (Safari) against a real Mac through
   24 h.
 - Anyone who can already run processes as the Mac user, or who controls a paired phone,
   can already control the Mac. Defending against that is out of scope.
+
+## 10. Implementation notes (slice 1)
+Facts found while implementing slice 1 that the sections above did not state. None of them
+changes the UX, the protocol, or the permissions.
+
+- **D7 content rect.** Apple documents `SCStreamFrameInfo.contentRect` as "points in
+  surface", `scaleFactor` as the display's px per point, and `contentScale` as the
+  original-to-surface scale. It does not document how they combine, and "`contentRect ×
+  contentScale`" alone does not give image pixels on a Retina display. The server converts
+  with `scaleFactor` and `contentScale`, and picks the reading that is closest to the full
+  image. That is the steady state, because the output size follows the window size (D4).
+  The result is clamped to the image. The chosen values are logged at debug level so the
+  device check in slice 1 acceptance item 6 can confirm them.
+- **D9 input source switch.** `TISSelectInputSource` does not take effect synchronously.
+  The injector waits 60 ms after selecting the ASCII-capable source before it posts the
+  text. It also waits 60 ms after posting, before it restores the saved source. It switches
+  only when the current source is not already the ASCII-capable one. The TIS calls run on
+  the main thread.
+- **D6 Keychain access after a rebuild.** With the ad-hoc signature (D17), a rebuilt binary
+  is a new code identity. Reading the existing Keychain item then waits on a macOS "allow
+  access" prompt. The app reads the secret off the main thread, so the menu stays usable
+  and shows "Waiting for Keychain access…". The server starts after the read. Signing with
+  `CODESIGN_IDENTITY` avoids the prompt, just as it keeps the TCC grants.
+- **D17 toolchain.** `scripts/build-app.sh` runs `xcrun swift`, so it uses the selected
+  Xcode, or `DEVELOPER_DIR` when that is set, rather than whatever `swift` comes first in
+  `PATH`. The current dependency graph (swift-crypto 5 through swift-nio-ssl) needs Swift
+  6.3 or later to parse its manifest.
+- **Slice 1 key names.** The phone sends only `Enter` and `Backspace` in slice 1, and the
+  text chunker sends `Tab` for `\t`. `KeyMap` holds just those three. The server rejects
+  other names and any non-empty `mods` with `bad_request`. The full §4.3 table arrives with
+  the key bar in slice 4.
+- **Slice 1 message size.** `/ws` accepts messages up to 1 MiB in slice 1. D12 raises the
+  limit to 26 MiB when image upload arrives in slice 3. Binary client messages get
+  `bad_request` until then.
