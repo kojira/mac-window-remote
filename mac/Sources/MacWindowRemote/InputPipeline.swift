@@ -142,7 +142,13 @@ actor InputPipeline {
 
     /// Posts the accumulated move and scroll once. Returns false when there is no target.
     private func drainMotionOnce() async -> Bool {
-        while let post = motionPost { await post.value }
+        // Wait until no post is in progress, so posts never overlap. A post that has finished
+        // is cleared here too: its own caller may not have resumed yet, and awaiting a
+        // finished task again returns at once, which would spin on the actor forever.
+        while let post = motionPost {
+            await post.value
+            if motionPost == post { motionPost = nil }
+        }
         guard let target, !closed else { return false }
         guard motionDirty || pendingScroll != nil else { return true }
         let moved = motionDirty
@@ -163,7 +169,10 @@ actor InputPipeline {
         }
         motionPost = post
         await post.value
-        motionPost = nil
+        // Only the post this call started is cleared. A waiter that resumes first must not
+        // see a finished post as still in progress; `await` on a finished task returns
+        // without suspending, so that would spin on the actor and starve every other input.
+        if motionPost == post { motionPost = nil }
         if moved { reportCursorSoon() }
         return true
     }
