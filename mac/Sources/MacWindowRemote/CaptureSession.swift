@@ -1,4 +1,4 @@
-import CoreImage
+import AppKit
 import CoreMedia
 import Foundation
 import ImageIO
@@ -137,9 +137,12 @@ final class CaptureSession: NSObject, CaptureHandle, SCStreamOutput, SCStreamDel
         return (header, data as Data)
     }
 
-    /// The window content rect inside the image in px. `contentRect` is in points in the
-    /// surface, so it is multiplied by the frame's point-to-pixel `scaleFactor`
-    /// (see DESIGN.md D7 implementation note).
+    /// The window content rect inside the image in px (D7).
+    /// Apple documents `contentRect` as "points in surface", `scaleFactor` as px per point, and
+    /// `contentScale` as original-to-surface scaling, but not how they combine. The conversion
+    /// is therefore picked from the plausible readings as the one closest to the full image,
+    /// which is the steady state because the output size follows the window size (D4).
+    /// See the D7 implementation note in DESIGN.md.
     static func contentRect(_ sample: CMSampleBuffer, imageWidth: Int, imageHeight: Int) -> Rect {
         let full = Rect(x: 0, y: 0, w: Double(imageWidth), h: Double(imageHeight))
         guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false)
@@ -147,16 +150,26 @@ final class CaptureSession: NSObject, CaptureHandle, SCStreamOutput, SCStreamDel
               let info = attachments.first,
               let rectDict = info[.contentRect] as! CFDictionary?,
               let rect = CGRect(dictionaryRepresentation: rectDict),
-              let scale = info[.scaleFactor] as? CGFloat
+              let scaleFactor = info[.scaleFactor] as? CGFloat
         else { return full }
-        return clampedContentRect(pointsRect: rect, scaleFactor: scale, imageWidth: imageWidth, imageHeight: imageHeight)
+        let contentScale = info[.contentScale] as? CGFloat ?? 1
+        log.debug("frame info contentRect=\(NSStringFromRect(rect), privacy: .public) scaleFactor=\(scaleFactor, privacy: .public) contentScale=\(contentScale, privacy: .public) image=\(imageWidth, privacy: .public)x\(imageHeight, privacy: .public)")
+        return contentRectPx(pointsRect: rect, scaleFactor: scaleFactor, contentScale: contentScale,
+                             imageWidth: imageWidth, imageHeight: imageHeight)
     }
 
-    static func clampedContentRect(pointsRect: CGRect, scaleFactor: CGFloat, imageWidth: Int, imageHeight: Int) -> Rect {
-        let full = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
-        let px = CGRect(x: pointsRect.origin.x * scaleFactor, y: pointsRect.origin.y * scaleFactor,
-                        width: pointsRect.width * scaleFactor, height: pointsRect.height * scaleFactor)
-        let r = px.intersection(full)
+    static func contentRectPx(pointsRect: CGRect, scaleFactor: CGFloat, contentScale: CGFloat,
+                              imageWidth: Int, imageHeight: Int) -> Rect {
+        let image = CGRect(x: 0, y: 0, width: imageWidth, height: imageHeight)
+        var multipliers: [CGFloat] = [scaleFactor, scaleFactor * contentScale]
+        if contentScale > 0 { multipliers.append(scaleFactor / contentScale) }
+        func scaled(_ m: CGFloat) -> CGRect {
+            CGRect(x: pointsRect.origin.x * m, y: pointsRect.origin.y * m,
+                   width: pointsRect.width * m, height: pointsRect.height * m)
+        }
+        func distance(_ r: CGRect) -> CGFloat { abs(r.width - image.width) + abs(r.height - image.height) }
+        let best = multipliers.map(scaled).min { distance($0) < distance($1) }!
+        let r = best.intersection(image)
         guard !r.isNull, r.width >= 1, r.height >= 1 else {
             return Rect(x: 0, y: 0, w: Double(imageWidth), h: Double(imageHeight))
         }
