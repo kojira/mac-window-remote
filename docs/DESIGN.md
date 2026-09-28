@@ -1,7 +1,10 @@
-# mac-window-remote — Design (v0.1, design phase)
+# mac-window-remote — Design (v0.2)
 
-Status: **proposed design, not yet implemented.** This file is the source of truth for
-the implementation. If the implementation discovers a fact that contradicts this
+Status: **slice 1 implemented (JPEG over WebSocket, absolute taps). Revision 2 (§11)
+replaces the transport with WebRTC and the pointer model with trackpad-style input; it
+is approved and not yet implemented.** Sections marked *Superseded by §11* describe
+slice 1 behavior that revision 2 removes. This file is the source of truth for the
+implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
 
 ## 1. Goal and scope
@@ -19,6 +22,9 @@ The user experience, end to end:
 4. The window streams to the phone. The user pinches to zoom, pans with two fingers,
    taps to click, drags with one finger to scroll, and types with the iPhone keyboard.
    Japanese IME and dictation work because only committed text is sent to the Mac.
+   *Revision 2 (§11) changes the gestures to a trackpad model: one finger moves the
+   Mac cursor relatively, two fingers scroll, three fingers pan, and the video arrives
+   over WebRTC so it also works well on mobile networks.*
 5. Later slices add: sending iPhone clipboard text to the Mac clipboard (optionally
    pasting it), sending an image that the Mac saves as a temp file and returns as a
    path, and a key bar with modifiers and user-defined key combos.
@@ -55,7 +61,8 @@ The user experience, end to end:
   sent from the Mac to the iPhone.
 - Sending the Mac clipboard to the iPhone.
 - A native iOS app, App Store or Mac App Store distribution, and notarized binaries.
-- H.264, WebRTC, or adaptive bitrate in the MVP. D3 describes the later path.
+- ~~H.264, WebRTC, or adaptive bitrate in the MVP.~~ Revision 2 (§11) adds all three,
+  because the user often connects over mobile networks.
 - Window thumbnails and app icons in the window list.
 - Non-macOS hosts.
 
@@ -90,6 +97,8 @@ The user experience, end to end:
     authentication.
 
 ### D3. Transport for the MVP: JPEG frames over WebSocket with ack-based flow control
+> *Superseded by §11 D20–D22.* The JPEG pipeline and `frame.ack` are removed once the
+> WebRTC video track works; there is no dual path.
 - The server sends binary WebSocket messages with the framing in §4.1. Each message
   holds a JSON header and one **complete JPEG** of the window. There are no diff tiles.
 - **Frame source:** `SCStream` with `SCContentFilter(desktopIndependentWindow:)`.
@@ -117,6 +126,8 @@ The user experience, end to end:
   with no benefit.
 
 ### D4. Capture resolution and Retina
+> *Amended by §11 D21:* pixel format, output-size alignment, and the resize path change
+> for the H.264 encoder. The 2560 px cap and the 500 ms bounds poll stay.
 - The output size in pixels is the window size in points × `filter.pointPixelScale`.
   For example, a window on a Retina display has scale 2.
 - The long edge is capped at **2560 px**, scaling both axes proportionally. This keeps
@@ -174,6 +185,8 @@ The user experience, end to end:
   only through the tailnet, and nothing else carries authority.
 
 ### D7. Coordinate mapping (touch → image → window points → global points)
+> *Superseded by §11 D24.* The server owns the cursor position; the client sends
+> relative deltas, so frame headers, `frameId` lookup, and `stale_coordinates` go away.
 - **Frame header** (§4.1) carries:
   - `frameId`, `windowId`
   - `width`, `height`: image size in px
@@ -205,6 +218,9 @@ The user experience, end to end:
   points.
 
 ### D8. Focusing the target window
+> *Superseded by §11 D25* (focus once per target, never wait per input). Steps 1–3 below
+> are reused; the per-input 300 ms wait is removed.
+
 Before every input (pointer, scroll, text, key, paste), the input actor does the
 following:
 1. **Is the window already frontmost?** It checks the first layer-0 on-screen window in
@@ -226,6 +242,8 @@ following:
 - Events come from `CGEventSource(stateID: .hidSystemState)` and are posted to
   `.cghidEventTap`.
 - All input is processed **in order** on one serial input actor.
+  *Amended by §11 D25:* cursor moves and scrolls are coalesced (latest wins) and never
+  wait behind focus.
 - **Click:** `mouseMoved` to `p`, then `leftMouseDown` and `leftMouseUp` with
   `mouseEventClickState = n`. A double-click is two down/up pairs with click state 1
   and then 2.
@@ -324,6 +342,8 @@ following:
   long-press then move is a left-button drag (D14).
 
 ### D14. Viewer gestures (the canvas uses `touch-action: none`, so all gestures are custom)
+> *Superseded by §11 D23.* One-finger scroll, double-tap, absolute tap-to-point, and
+> the slice 4 long-press rows are replaced by the trackpad model.
 | Gesture | Effect | Slice |
 |---|---|---|
 | 2-finger pinch / pan | Zoom (1× = fit to screen, up to 8×) and pan the view on the phone only | 1 |
@@ -396,6 +416,8 @@ A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom a
 - **No CI** in these slices. Unit tests run with `swift test` in `mac/`.
 
 ### D18. Reconnect and failure behavior
+> *Amended by §11 D22/D27:* the viewer also tracks the WebRTC connection state; see D27
+> for media failures. Signaling reconnect is unchanged.
 The client state machine:
 
 ```
