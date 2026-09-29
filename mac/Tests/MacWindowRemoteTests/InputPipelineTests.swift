@@ -28,6 +28,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     func listApps() async -> [AppItem] { [] }
     func appIcon(id: String) async -> Data? { nil }
     func openApp(id: String) async -> AppOpenOutcome { .failed(.appNotFound) }
+    func listMenu(windowId: UInt32) async -> MenuListOutcome { .failed(.menuUnavailable) }
 }
 
 @Suite struct InputPipelineTests {

@@ -16,6 +16,8 @@ struct InputAction: Sendable {
         case key(String, mods: [KeyModifier])
         /// Put the text on the Mac clipboard, then ⌘V into the window (D36).
         case paste(String)
+        /// Press the app's menu item at `path` if the titles along it still match (D43).
+        case menuPress(path: [Int], titles: [String])
     }
     let windowId: UInt32
     let cursor: CursorState
@@ -32,6 +34,7 @@ enum DiscreteInput: Sendable {
     case text(String)
     case key(String, mods: [KeyModifier])
     case paste(String)
+    case menuPress(path: [Int], titles: [String])
 }
 
 /// The input actor (D24, D25). It owns the cursor for the viewed window, coalesces moves and
@@ -123,6 +126,7 @@ actor InputPipeline {
         case .text(let text): kind = .text(text)
         case .key(let name, let mods): kind = .key(name, mods: mods)
         case .paste(let text): kind = .paste(text)
+        case .menuPress(let path, let titles): kind = .menuPress(path: path, titles: titles)
         }
         discrete.append(InputAction(windowId: target, cursor: cursor, kind: kind, reply: reply))
         guard discreteTask == nil else { return }
@@ -244,6 +248,7 @@ extension DiscreteInput {
         case .text: return "text"
         case .key: return "key"
         case .paste: return "paste"
+        case .menuPress: return "menu.press"
         }
     }
 }
@@ -267,6 +272,7 @@ extension InputAction.Kind {
         case .text: return "text"
         case .key: return "key"
         case .paste: return "paste"
+        case .menuPress: return "menu.press"
         }
     }
 }

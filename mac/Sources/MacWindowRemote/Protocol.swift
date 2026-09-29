@@ -36,6 +36,14 @@ enum ErrorCode: String, Codable {
     case appLaunchFailed = "app_launch_failed"
     /// D40: no window of the opened app appeared within 10 s.
     case appNoWindow = "app_no_window"
+    /// D43: the viewed app has no readable menu bar.
+    case menuUnavailable = "menu_unavailable"
+    /// D43: the pressed item is not in the current listing or the menu changed since.
+    case menuStale = "menu_stale"
+    /// D43: the item is disabled now.
+    case menuDisabled = "menu_disabled"
+    /// D43: AXPress failed.
+    case menuFailed = "menu_failed"
     case `internal` = "internal"
 }
 
@@ -71,6 +79,10 @@ enum ClientMessage: Equatable {
     case appsList
     /// Launch or activate an app of the last list and view its front window (D40).
     case appOpen(id: String)
+    /// The viewed app's menu bar (D43).
+    case menuList
+    /// Press the item `id` of listing `gen` (D43).
+    case menuPress(id: String, gen: Int)
 }
 
 /// What Mac audio goes to the phone (D39). Not persisted on the Mac; the phone re-sends it.
@@ -119,6 +131,7 @@ extension ClientMessage {
         let aspect: Double?
         let mode: String?
         let id: String?
+        let gen: Int?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -212,6 +225,14 @@ extension ClientMessage {
             let id = try require(e.id, "id")
             guard !id.isEmpty, id.count <= 64 else { throw ProtocolError.invalidValue("id") }
             return .appOpen(id: id)
+        case "menu.list":
+            return .menuList
+        case "menu.press":
+            let id = try require(e.id, "id")
+            guard MenuTree.path(id) != nil else { throw ProtocolError.invalidValue("id") }
+            let gen = try require(e.gen, "gen")
+            guard gen > 0 else { throw ProtocolError.invalidValue("gen") }
+            return .menuPress(id: id, gen: gen)
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -223,7 +244,8 @@ extension ClientMessage {
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen: return .socket
+        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress:
+            return .socket
         case .move, .scroll: return .motion
         case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
         }
@@ -249,6 +271,8 @@ extension ClientMessage {
         case .audio: return "audio"
         case .appsList: return "apps.list"
         case .appOpen: return "app.open"
+        case .menuList: return "menu.list"
+        case .menuPress: return "menu.press"
         }
     }
 }
@@ -368,6 +392,10 @@ enum ServerMessage {
     case audioState(mode: AudioMode)
     /// The Apps tab list (D40).
     case apps([AppItem])
+    /// The viewed app's menus (D43); `gen` names this listing for `menu.press`.
+    case menu(gen: Int, windowId: UInt32, listing: MenuListing)
+    /// A `menu.press` succeeded (D43).
+    case menuPressed(id: String)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -385,6 +413,10 @@ enum ServerMessage {
     }
     private struct Switched: Encodable { let t = "view.switched"; let windowId: UInt32; let app: String; let title: String }
     private struct Apps: Encodable { let t = "apps"; let items: [AppItem] }
+    private struct Menu: Encodable {
+        let t = "menu"; let gen: Int; let windowId: UInt32; let menus: [MenuNode]; let truncated: Bool
+    }
+    private struct MenuPressed: Encodable { let t = "menu.pressed"; let id: String }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
@@ -432,6 +464,10 @@ enum ServerMessage {
             data = try? encoder.encode(Audio(mode: mode))
         case .apps(let items):
             data = try? encoder.encode(Apps(items: items))
+        case .menu(let gen, let windowId, let listing):
+            data = try? encoder.encode(Menu(gen: gen, windowId: windowId, menus: listing.menus, truncated: listing.truncated))
+        case .menuPressed(let id):
+            data = try? encoder.encode(MenuPressed(id: id))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

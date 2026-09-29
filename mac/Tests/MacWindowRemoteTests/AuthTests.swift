@@ -29,6 +29,7 @@ private final class FakeBackend: SessionBackend {
     func listApps() async -> [AppItem] { [] }
     func appIcon(id: String) async -> Data? { nil }
     func openApp(id: String) async -> AppOpenOutcome { .failed(.appNotFound) }
+    func listMenu(windowId: UInt32) async -> MenuListOutcome { .failed(.menuUnavailable) }
 }
 
 /// The Tailscale identity check through the real server (D32): only the owner's
