@@ -43,3 +43,13 @@ export function decodeThumb(msg) {
   if (msg.missing === true) return { windowId: msg.windowId, src: null };
   return null;
 }
+
+/// A `view.switched` message (D38) as the viewed window {id, app, title}, or null if malformed.
+export function decodeViewSwitched(msg) {
+  if (!msg || !Number.isInteger(msg.windowId)) return null;
+  return {
+    id: msg.windowId,
+    app: typeof msg.app === 'string' ? msg.app : '',
+    title: typeof msg.title === 'string' ? msg.title : '',
+  };
+}

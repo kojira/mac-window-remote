@@ -3,6 +3,7 @@ import { Viewer } from './viewer.js';
 import { VideoLink } from './rtc.js';
 import { TextInput } from './input.js';
 import { SlotBar } from './slotbar.js';
+import { decodeViewSwitched } from './slots.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
 import {
@@ -139,6 +140,19 @@ function openWindow(w) {
   renderFitWindow();
   viewMessage('');
   send({ t: 'view.start', windowId: w.id });
+  refreshSlots();
+}
+
+/// The Mac switched the view to the app that ⌘Tab brought forward (D38). Its `view.state`
+/// for the new id follows, so this only makes that window the viewed one.
+function onViewSwitched(msg) {
+  const w = decodeViewSwitched(msg);
+  if (!w || screen !== 'viewer' || w.id === viewingWindowId()) return;
+  sessionStorage.setItem(WINDOW_KEY, JSON.stringify(w));
+  viewer.clear();
+  slotBar.render();
+  renderFitWindow();
+  viewMessage('');
   refreshSlots();
 }
 
@@ -366,6 +380,9 @@ function onMessage(msg) {
       break;
     case 'view.state':
       onViewState(msg);
+      break;
+    case 'view.switched':
+      onViewSwitched(msg);
       break;
     case 'result':
       onUploadReply(msg);
