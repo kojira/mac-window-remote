@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Mac Window">
+  <title>Mac Window Remote</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <section id="denied" class="screen" hidden>
+    <h1>Not allowed</h1>
+    <p class="error">Not allowed: sign in to Tailscale as the Mac owner.</p>
+    <p>This iPhone must use Tailscale with the same account as the Mac. The allowed account is shown in the Mac menu bar.</p>
+    <button id="denied-retry" type="button">Try again</button>
+  </section>
+
+  <section id="list" class="screen" hidden>
+    <header class="bar">
+      <h1>Windows</h1>
+      <span class="dot" data-conn></span>
+      <button id="refresh" type="button">Refresh</button>
+    </header>
+    <p id="list-message" class="message" hidden></p>
+    <ul id="windows"></ul>
+  </section>
+
+  <section id="viewer" class="screen" hidden>
+    <div id="stage"><video id="video" class="waiting" playsinline muted autoplay disablepictureinpicture></video><div id="cursor" hidden></div></div>
+    <div id="drag-badge" hidden>Dragging — tap to release</div>
+    <div id="viewer-overlay" class="overlay" hidden><span id="viewer-overlay-text"></span><button id="retry" type="button" hidden>Retry</button></div>
+    <footer id="bottom-bar">
+      <button id="back" type="button" aria-label="Windows">‹<span class="dot" data-conn></span></button>
+      <div id="slots"></div>
+      <button id="fit" type="button">Fit</button>
+      <button id="keyboard" type="button" aria-label="Keyboard">⌨︎</button>
+      <input id="text" type="text" enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type, then Return to send">
+    </footer>
+    <div id="slot-menu" hidden>
+      <div class="sheet">
+        <button type="button" data-act="assign">Assign current window</button>
+        <button type="button" data-act="clear">Clear</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" hidden></div>
+</body>
+</html>
