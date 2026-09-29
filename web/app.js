@@ -6,6 +6,7 @@ import { SlotBar } from './slotbar.js';
 import { decodeViewSwitched } from './slots.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
+import { MenuSheet, decodeMenu } from './appmenu.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
@@ -56,7 +57,7 @@ $('denied-retry').addEventListener('click', () => {
 function show(name) {
   screen = name;
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
-  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); closePasteSheet(); }
+  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); closePasteSheet(); menuSheet.close(); }
   renderFitWindow();
 }
 
@@ -235,6 +236,7 @@ function onViewSwitched(msg) {
     return;
   }
   if (!w || screen !== 'viewer' || w.id === viewingWindowId()) return;
+  menuSheet.close();
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify(w));
   viewer.clear();
   slotBar.render();
@@ -541,8 +543,15 @@ function onMessage(msg) {
     case 'result':
       onUploadReply(msg);
       break;
+    case 'menu':
+      onMenu(msg);
+      break;
+    case 'menu.pressed':
+      pendingMenuPresses.delete(msg.id);
+      break;
     case 'error':
       if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
+      else if (onMenuError(msg)) break;
       else if (!onAppOpenError(msg)) onError(msg);
       break;
     case 'ping':
@@ -633,6 +642,46 @@ function onError(msg) {
     default:
       toast(msg.message || msg.code);
   }
+}
+
+// ---------- ☰ the viewed app's menu bar (D43) ----------
+
+/// Pressed menu items waiting for `menu.pressed` or an error: id → title.
+const pendingMenuPresses = new Map();
+
+$('app-menu').addEventListener('click', () => {
+  const w = viewingWindow();
+  if (screen !== 'viewer' || !w) return;
+  keyPanel.close();
+  menuSheet.open(w.app);
+  if (!send({ t: 'menu.list' })) menuSheet.showError('Not connected to the Mac');
+});
+
+function onMenu(msg) {
+  const menu = decodeMenu(msg);
+  if (!menu || menu.windowId !== viewingWindowId()) return;
+  menuSheet.setMenu(menu);
+}
+
+function pressMenuItem(item, gen) {
+  if (!send({ t: 'menu.press', id: item.id, gen })) { toast('Not connected to the Mac'); return; }
+  pendingMenuPresses.set(item.id, item.title);
+}
+
+/// An error for `menu.list` (while the sheet is open) or a pending `menu.press`; true if it was.
+function onMenuError(msg) {
+  if (msg.id != null && pendingMenuPresses.has(msg.id)) {
+    const title = pendingMenuPresses.get(msg.id);
+    pendingMenuPresses.delete(msg.id);
+    toast(`Couldn't run ${title}`);
+    return true;
+  }
+  if (msg.id == null && menuSheet.isOpen
+      && ['menu_unavailable', 'permission_accessibility', 'window_not_found'].includes(msg.code)) {
+    menuSheet.showError(msg.message || "This app's menu can't be read");
+    return true;
+  }
+  return false;
 }
 
 // ---------- paste the iPhone clipboard or an image into the window (D36) ----------
@@ -881,6 +930,8 @@ const keyPanel = new KeyPanel({
   onLayout: (change) => viewer.keepZoom(change),
   onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile }[action]?.()),
 });
+
+const menuSheet = new MenuSheet({ root: $('menu-sheet'), onPress: pressMenuItem });
 
 setListTab(listTab);
 // Earlier versions paired with a stored secret; it is no longer used.
