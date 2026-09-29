@@ -6,6 +6,7 @@ import { SlotBar } from './slotbar.js';
 import { decodeViewSwitched } from './slots.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
+import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
   IMAGE_MAX_BYTES, clipboardMessage, imageChunkMessages, shortPath,
@@ -85,7 +86,7 @@ function listMessage(text) {
 function renderWindows(items) {
   const ul = $('windows');
   ul.textContent = '';
-  if (!permissions.screenRecording) return;
+  if (!permissions.screenRecording || listTab !== 'windows') return;
   if (items.length === 0) {
     listMessage('No windows on screen (minimized windows and other Spaces are not shown).');
     return;
@@ -115,6 +116,10 @@ function showList() {
 }
 
 function refreshList() {
+  if (listTab === 'apps') {
+    send({ t: 'apps.list' });
+    return;
+  }
   if (!permissions.screenRecording) {
     $('windows').textContent = '';
     listMessage('Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
@@ -134,20 +139,101 @@ $('back').addEventListener('click', () => {
 
 /// From the list, or a quick-switch slot while viewing (D33): the peer connection stays.
 function openWindow(w) {
+  enterViewer(w);
+  send({ t: 'view.start', windowId: w.id });
+  refreshSlots();
+}
+
+/// Shows the viewer for window `w` {id, app, title}; the caller or the Mac starts the view.
+function enterViewer(w) {
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify({ id: w.id, app: w.app, title: w.title }));
   viewer.clear();
   show('viewer');
   slotBar.render();
   renderFitWindow();
   viewMessage('');
-  send({ t: 'view.start', windowId: w.id });
-  refreshSlots();
+}
+
+// ---------- Windows | Apps (D40) ----------
+
+let listTab = parseListTab(sessionStorage.getItem(LIST_TAB_KEY));
+/// The app being opened {id, name, timer}, or null.
+let appOpening = null;
+
+function setListTab(tab) {
+  listTab = tab;
+  sessionStorage.setItem(LIST_TAB_KEY, tab);
+  for (const b of document.querySelectorAll('#list-tabs [data-tab]')) {
+    b.setAttribute('aria-selected', String(b.dataset.tab === tab));
+  }
+  $('windows').hidden = tab !== 'windows';
+  $('apps').hidden = tab !== 'apps';
+  if (tab === 'apps') $('windows').textContent = ''; else $('apps').textContent = '';
+  listMessage('');
+  clearAppOpening();
+  if (screen === 'list') refreshList();
+}
+
+for (const b of document.querySelectorAll('#list-tabs [data-tab]')) {
+  b.addEventListener('click', () => { if (b.dataset.tab !== listTab) setListTab(b.dataset.tab); });
+}
+
+function renderApps(msg) {
+  if (listTab !== 'apps') return;
+  const apps = decodeApps(msg);
+  renderAppGrid($('apps'), apps, openApp);
+  listMessage(apps.length === 0 ? 'No apps in the Dock.' : '');
+}
+
+/// The Mac launches or activates the app and answers `view.switched` for its front window, or
+/// an error (D40).
+function openApp(a) {
+  if (!send({ t: 'app.open', id: a.id })) { toast('Not connected to the Mac'); return; }
+  clearAppOpening();
+  const timer = setTimeout(() => {
+    if (appOpening?.id !== a.id) return;
+    clearAppOpening();
+    toast(`${a.name} has no window`);
+  }, APP_OPEN_TIMEOUT_MS);
+  appOpening = { id: a.id, name: a.name, timer };
+  const o = $('app-opening');
+  o.textContent = `Opening ${a.name}…`;
+  o.hidden = false;
+}
+
+function clearAppOpening() {
+  if (appOpening) clearTimeout(appOpening.timer);
+  appOpening = null;
+  $('app-opening').hidden = true;
+}
+
+/// An `error` for the pending `app.open`; true if it was one.
+function onAppOpenError(msg) {
+  if (!['app_no_window', 'app_not_found', 'app_launch_failed'].includes(msg.code)) return false;
+  if (!appOpening || msg.id !== appOpening.id) return true;
+  const name = appOpening.name;
+  clearAppOpening();
+  if (msg.code === 'app_no_window') toast(`${name} has no window`);
+  else if (msg.code === 'app_not_found') { toast(`${name} is no longer available`); refreshList(); }
+  else toast(`Could not open ${name}`);
+  return true;
 }
 
 /// The Mac switched the view to the window that ⌘Tab or ⌘F1 brought forward (D38). Its `view.state`
 /// for the new id follows, so this only makes that window the viewed one.
 function onViewSwitched(msg) {
   const w = decodeViewSwitched(msg);
+  if (w && screen === 'list') {
+    // D40: the app opened from the Apps tab has a window; the Mac already views it.
+    if (appOpening) {
+      clearAppOpening();
+      enterViewer(w);
+      refreshSlots();
+    } else {
+      send({ t: 'view.stop' });
+    }
+    return;
+  }
   if (!w || screen !== 'viewer' || w.id === viewingWindowId()) return;
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify(w));
   viewer.clear();
@@ -343,6 +429,7 @@ function connect() {
     link.close();
     viewer.endInput();
     abandonUploads();
+    clearAppOpening();
     onClosed(ev.code);
   };
 }
@@ -359,6 +446,7 @@ function closeSocket() {
   clearTimeout(deadTimer);
   link.close();
   abandonUploads();
+  clearAppOpening();
   if (socket) {
     const s = socket;
     socket = null;
@@ -441,6 +529,9 @@ function onMessage(msg) {
     case 'thumb':
       slotBar.onThumb(msg);
       break;
+    case 'apps':
+      renderApps(msg);
+      break;
     case 'view.state':
       onViewState(msg);
       break;
@@ -452,7 +543,7 @@ function onMessage(msg) {
       break;
     case 'error':
       if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
-      else onError(msg);
+      else if (!onAppOpenError(msg)) onError(msg);
       break;
     case 'ping':
       break;
@@ -774,6 +865,7 @@ const keyPanel = new KeyPanel({
   onAction: (action) => (action === 'paste' ? pasteClipboard() : pickImage()),
 });
 
+setListTab(listTab);
 // Earlier versions paired with a stored secret; it is no longer used.
 localStorage.removeItem('mwr.secret');
 renderAudio();
