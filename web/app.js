@@ -5,6 +5,9 @@ import { TextInput } from './input.js';
 import { SlotBar } from './slotbar.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
+import {
+  IMAGE_MAX_BYTES, clipboardMessage, imageChunkMessages, shortPath,
+} from './upload.js';
 
 /// The viewed window {id, app, title} (D33: slots store the app and title too).
 const WINDOW_KEY = 'mwr.window';
@@ -50,7 +53,7 @@ $('denied-retry').addEventListener('click', () => {
 function show(name) {
   screen = name;
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
-  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); }
+  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); closePasteSheet(); }
   renderFitWindow();
 }
 
@@ -62,12 +65,13 @@ function setConnDots(state) {
 }
 
 let toastTimer = null;
-export function toast(text) {
+/// A sticky toast (upload progress) stays until the next toast replaces it.
+export function toast(text, { sticky = false } = {}) {
   const t = $('toast');
   t.textContent = text;
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 3000);
+  if (!sticky) toastTimer = setTimeout(() => { t.hidden = true; }, 3000);
 }
 
 function listMessage(text) {
@@ -261,13 +265,23 @@ function connect() {
     setConnDots('off');
     link.close();
     viewer.endInput();
+    abandonUploads();
     onClosed(ev.code);
   };
+}
+
+/// The socket closed: no reply will come for requests sent on it. An image that is still
+/// waiting for the connection (after the camera hid the page) keeps waiting.
+function abandonUploads() {
+  if (imageUpload?.sending) { imageUpload.cancelled = true; imageUpload = null; }
+  if (pendingUploads.size > 0) toast('Upload interrupted — try again');
+  pendingUploads.clear();
 }
 
 function closeSocket() {
   clearTimeout(deadTimer);
   link.close();
+  abandonUploads();
   if (socket) {
     const s = socket;
     socket = null;
@@ -353,8 +367,12 @@ function onMessage(msg) {
     case 'view.state':
       onViewState(msg);
       break;
+    case 'result':
+      onUploadReply(msg);
+      break;
     case 'error':
-      onError(msg);
+      if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
+      else onError(msg);
       break;
     case 'ping':
       break;
@@ -438,6 +456,167 @@ function onError(msg) {
   }
 }
 
+// ---------- paste the iPhone clipboard or an image into the window (D36) ----------
+
+/// Upload/paste requests waiting for the Mac's `result` or `error`: id → {kind, chars}.
+const pendingUploads = new Map();
+let uploadCounter = 0;
+/// The image upload in progress, or null; a newer pick cancels it.
+let imageUpload = null;
+/// While sending an image, at most this much waits in the socket's send buffer, so the
+/// socket's pong answers the Mac's 10 s ping in time even on a slow link.
+const UPLOAD_BUFFER_BYTES = 512 << 10;
+/// Taking a photo can hide the page and reconnect; the picked image waits this long for it.
+const UPLOAD_CONNECT_WAIT_MS = 10000;
+const PROGRESS_POLL_MS = 50;
+
+function nextUploadId(prefix) {
+  uploadCounter += 1;
+  return `${prefix}${uploadCounter}`;
+}
+
+/// A binary WebSocket message; false if the socket is not ready.
+function sendBinary(bytes) {
+  if (!socket || !authed || socket.readyState !== WebSocket.OPEN) return false;
+  socket.send(bytes);
+  return true;
+}
+
+function canUpload() {
+  if (screen !== 'viewer' || viewingWindowId() == null) { toast('Open a window first'); return false; }
+  if (!socket || !authed || socket.readyState !== WebSocket.OPEN) { toast('Not connected to the Mac'); return false; }
+  return true;
+}
+
+/// 📋: runs inside the tap, so iOS allows the clipboard read (it shows its Paste callout).
+/// Without readText, or when it is refused, the fallback sheet opens (D5).
+function pasteClipboard() {
+  if (!canUpload()) return;
+  if (!navigator.clipboard?.readText) { openPasteSheet(); return; }
+  navigator.clipboard.readText().then((text) => {
+    if (!text) { toast('The iPhone clipboard has no text'); return; }
+    sendClipboardText(text);
+  }, () => openPasteSheet());
+}
+
+/// Returns true if the text was sent.
+function sendClipboardText(text) {
+  if (!canUpload()) return false;
+  const id = nextUploadId('c');
+  const message = clipboardMessage(id, text);
+  if (!message) {
+    toast(text ? 'Text too large (max 1 MiB)' : 'Nothing to paste');
+    return false;
+  }
+  pendingUploads.set(id, { kind: 'clipboard', chars: [...text].length });
+  if (!sendBinary(message)) { pendingUploads.delete(id); toast('Not connected to the Mac'); return false; }
+  return true;
+}
+
+function openPasteSheet() {
+  const sheet = $('paste-sheet');
+  $('paste-text').value = '';
+  sheet.hidden = false;
+  $('paste-text').focus();
+}
+
+function closePasteSheet() {
+  $('paste-sheet').hidden = true;
+  $('paste-text').blur();
+}
+
+$('paste-send').addEventListener('click', () => {
+  const text = $('paste-text').value;
+  if (!text) { toast('Long-press the box and choose Paste'); return; }
+  if (sendClipboardText(text)) closePasteSheet();
+});
+$('paste-cancel').addEventListener('click', closePasteSheet);
+
+/// 🖼: the file picker (photo library, camera, Files) must open inside the tap.
+function pickImage() {
+  if (!canUpload()) return;
+  const input = $('image-file');
+  input.value = '';
+  input.click();
+}
+
+$('image-file').addEventListener('change', () => {
+  const file = $('image-file').files?.[0];
+  if (file) uploadImage(file);
+});
+
+async function uploadImage(file) {
+  if (file.size > IMAGE_MAX_BYTES) { toast('Image too large (max 25 MiB)'); return; }
+  if (file.size === 0) { toast('The image is empty'); return; }
+  if (imageUpload) imageUpload.cancelled = true;
+  const upload = { cancelled: false };
+  imageUpload = upload;
+  let bytes;
+  try { bytes = new Uint8Array(await file.arrayBuffer()); } catch { toast('Could not read the image'); return; }
+  // The page may have been hidden (camera) and be reconnecting: wait until viewing resumes.
+  // `view.start` goes out when the video link is ready, and the Mac handles it before chunks.
+  const deadline = performance.now() + UPLOAD_CONNECT_WAIT_MS;
+  while (!(authed && link.canSend()) && performance.now() < deadline && !upload.cancelled) {
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  if (upload.cancelled) return;
+  const ws = socket;
+  if (!canUpload()) { imageUpload = null; return; }
+  const id = nextUploadId('i');
+  upload.sending = true;
+  pendingUploads.set(id, { kind: 'image' });
+  const showProgress = bytes.length > 2 * UPLOAD_BUFFER_BYTES;
+  const progress = (sent) => {
+    if (showProgress) toast(`Uploading… ${Math.max(0, Math.floor((sent / bytes.length) * 100))}%`, { sticky: true });
+  };
+  progress(0);
+  for (const chunk of imageChunkMessages(id, bytes)) {
+    // Keep the send buffer small, so input and pings are never stuck behind the image.
+    while (ws === socket && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > UPLOAD_BUFFER_BYTES && !upload.cancelled) {
+      progress(chunk.offset - ws.bufferedAmount);
+      await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
+    }
+    if (upload.cancelled) { pendingUploads.delete(id); return; }
+    if (ws !== socket || !sendBinary(chunk.data)) {
+      pendingUploads.delete(id);
+      imageUpload = null;
+      toast('Upload interrupted — try again');
+      return;
+    }
+  }
+  while (ws === socket && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > 0 && !upload.cancelled) {
+    progress(bytes.length - ws.bufferedAmount);
+    await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
+  }
+  if (showProgress && !upload.cancelled && pendingUploads.has(id)) toast('Pasting…', { sticky: true });
+  if (imageUpload === upload) imageUpload = null;
+}
+
+/// `result` or `error` for a clipboard or image request (D36).
+function onUploadReply(msg) {
+  const pending = pendingUploads.get(msg.id);
+  if (!pending) return;
+  pendingUploads.delete(msg.id);
+  if (msg.t === 'result') {
+    if (pending.kind === 'image') toast(`Pasted path: ${shortPath(msg.path || '')}`);
+    else toast(`Pasted ${pending.chars} chars`);
+    return;
+  }
+  switch (msg.code) {
+    case 'too_large':
+      toast(pending.kind === 'image' ? 'Image too large (max 25 MiB)' : 'Text too large (max 1 MiB)');
+      break;
+    case 'unsupported_type':
+      toast('Not a supported image (PNG, JPEG, HEIC, GIF, WebP)');
+      break;
+    case 'window_not_found':
+      toast('Open a window first');
+      break;
+    default:
+      toast(msg.message || msg.code);
+  }
+}
+
 // Capture stops when nobody is watching (D15): close when hidden, reconnect when visible.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
@@ -503,6 +682,7 @@ const keyPanel = new KeyPanel({
   textInput,
   sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
   onLayout: (change) => viewer.keepZoom(change),
+  onAction: (action) => (action === 'paste' ? pasteClipboard() : pickImage()),
 });
 
 // Earlier versions paired with a stored secret; it is no longer used.
