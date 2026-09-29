@@ -2117,3 +2117,43 @@ On a real iPhone against the real Mac:
 5. *Unit:* tree building (Apple menu omitted, separators, caps, truncation, shortcuts, marks),
    title-verified press, `menu.list`/`menu.press` decoding, stale gen/window rejected; web
    decoding, drill-down, disabled rows, press with `gen`, closing.
+
+## 23. The viewed app's floating and newly opened windows (user decision, Issue #16; amends D4, D25)
+
+### D44. Child windows are shown with the viewed window
+- **Why (user request, Issue #16):** plug-in editors and palettes (e.g. Melodyne in Logic Pro)
+  and windows the app opens while viewed (Settings, dialogs) are separate windows, so a plain
+  window capture never shows them.
+- **What is included.** While viewing window W of app P: W; P's on-screen windows at a
+  floating layer (0 < layer < 25) at least 60 × 60 pt; and P's normal (layer 0) windows whose
+  id did not exist when viewing W started. Those adopted windows stay included while open, even
+  behind W. P's other windows that already existed are not included. Children must touch W's
+  display.
+- **Capture.** With children, the stream uses `SCContentFilter(display:including:)` with W and
+  the children, `sourceRect` = union of W and the children's frames clamped to W's display.
+  The window list is polled every 0.5 s; a changed child set or area rebuilds the filter
+  (`updateContentFilter` + `updateConfiguration`). Without children, the stream is the plain
+  window capture exactly as before (D4).
+- **Input.** The phone's normalized cursor maps across the composite area, so a tap on a child
+  lands at its real screen position. A click on an adopted normal child raises that child
+  instead of W; keys go to an adopted child while it is the front normal window, else W (D25).
+  `menu.press` never switches the view; a window it opens appears in the composite.
+- **Limits.** Children on another display and a W spanning displays are not composited. The
+  composite shows whatever of P's included windows covers W as on screen (other apps' windows
+  are left out). D35 fit resizes W only; with children the video aspect is the composite's.
+  A child appears up to about 0.5 s after it opens. Windows P opened before viewing W (except
+  floating ones) never join.
+- **Source changes:** `ChildWindows.swift`, `CaptureSession.swift`, `MacBackend.swift`.
+
+### D44 acceptance criteria
+On the real Mac and iPhone:
+1. Viewing a Logic Pro project, opening Melodyne shows its window in the video; a tap on it
+   reaches Melodyne at that spot.
+2. Viewing TextEdit, ☰ → TextEdit → Settings… shows the Settings window in the video next to
+   the document; tapping the document keeps Settings shown; closing Settings returns the video
+   to the document alone.
+3. Another TextEdit document that was already open is not shown.
+4. A window with no floating or new windows streams exactly as before.
+5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), adoption of new layer-0
+   windows, kept until closed, pre-existing excluded, union and display clamping, no children
+   ⇒ plain window, change detection, click/key focus targets (`ChildWindowsTests`).

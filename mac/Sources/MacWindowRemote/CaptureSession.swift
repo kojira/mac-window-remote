@@ -181,10 +181,12 @@ final class CaptureSession: NSObject, CaptureHandle, SCStreamOutput, SCStreamDel
             }
         }
         let config = configuration(for: shown.rect.size, filter: newFilter, sourceRect: sourceRect)
-        let stream = queue.sync { self.stream }
+        let (stream, current) = queue.sync { (self.stream, self.filter) }
         var applied = false
         do {
-            try await stream?.updateContentFilter(newFilter)
+            // A child ScreenCaptureKit does not list keeps the plain window filter; it is not
+            // swapped for itself on every poll.
+            if newFilter !== current { try await stream?.updateContentFilter(newFilter) }
             try await stream?.updateConfiguration(config)
             applied = true
         } catch {
