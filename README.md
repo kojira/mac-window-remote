@@ -4,7 +4,7 @@ View and operate **one Mac window at a time** from an iPhone.
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
-- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C, one-tap ⌘F1 and ⌘Tab, and 📋 Paste / 🖼 Image; its text key opens the iPhone keyboard.
+- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C, one-tap ⌘F1 and ⌘Tab, space and ⏎, and a ⋯ menu with 📋 Paste / 🖼 Image / ⌘Q; its text key opens the iPhone keyboard.
 - The list screen (‹) has **Windows | Apps**: Apps shows the Mac Dock's apps (and other running apps) as icons; tap one to launch or bring it forward and view its front window.
 - 🔊 in the bottom bar plays the Mac's sound on the iPhone instead of the Mac's speakers: **App** (the viewed window's app) or **All** (the whole Mac); 🔇 **Off** gives the sound back to the Mac. Needs macOS 14.2 or later.
 
@@ -42,7 +42,7 @@ CODESIGN_IDENTITY="<name of the identity>" scripts/build-app.sh
 
 Development: `MWR_WEB_ROOT=$PWD/web build/MacWindowRemote.app/Contents/MacOS/MacWindowRemote` serves the web client from disk, so client edits need only a reload.
 
-Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer, the quick-switch slots, the key panel modifiers, and the Apps tab.
+Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer, the quick-switch slots, the key panel and its modifiers, and the Apps tab.
 
 The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, BSD-style license in `Contents/Resources/WebRTC-LICENSE`); `scripts/build-app.sh` embeds and signs it.
 

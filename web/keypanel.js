@@ -1,7 +1,7 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
 // an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
-// third row has one-tap ⌘F1 and ⌘Tab (D37) and pastes the iPhone clipboard or an image into
-// the window (D36).
+// third row is one-tap ⌘F1 and ⌘Tab (D37), space, ⏎, and ⋯, a menu with 📋 Paste and 🖼 Image
+// (D36) and ⌘Q (D41).
 
 import { mergeMods } from './modifiers.js';
 
@@ -19,7 +19,13 @@ const NORMAL = [
   { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
   { label: '⌘F1', key: 'F1', mods: ['cmd'], combo: true }, { label: '⌘Tab', key: 'Tab', mods: ['cmd'], combo: true },
-  { label: '📋 Paste', action: 'paste', wide: true }, { label: '🖼 Image', action: 'image', wide: true },
+  { label: 'space', key: 'Space', repeat: true, wide: true }, { label: '⏎', key: 'Enter', repeat: true },
+  { label: '⋯', more: true },
+];
+// The ⋯ menu (D41), top to bottom. ⌘Q is here, not in the row, so a stray tap cannot quit the app.
+const MORE_MENU = [
+  { label: '📋 Paste', action: 'paste' }, { label: '🖼 Image', action: 'image' },
+  { label: '⌘Q', key: 'q', mods: ['cmd'], combo: true },
 ];
 const FN = [
   ...Array.from({ length: 12 }, (_, i) => ({ label: `F${i + 1}`, key: `F${i + 1}` })),
@@ -47,12 +53,21 @@ export class KeyPanel {
     this.modButtons = [];
     this.textButton = null;
     this.repeatTimer = null;
+    this.menu = null;
+    this.moreButton = null;
 
     toggle.addEventListener('click', () => (this.isOpen() ? this.close() : this.open()));
     modifiers.onChange = () => this.renderModifiers();
     textInput.onFocusChange = (focused) => this.textButton?.classList.toggle('active', focused);
     // A held key must not keep repeating into a later connection.
-    document.addEventListener('visibilitychange', () => this.stopRepeat());
+    document.addEventListener('visibilitychange', () => { this.stopRepeat(); this.closeMenu(); });
+    // A touch outside the ⋯ menu closes it and still goes where it was aimed (the trackpad
+    // keeps working). Touches on ⋯ itself toggle the menu from its own handler.
+    const outside = (e) => {
+      if (this.menu && !this.menu.contains(e.target) && !this.moreButton?.contains(e.target)) this.closeMenu();
+    };
+    document.addEventListener('touchstart', outside, { capture: true, passive: true });
+    document.addEventListener('mousedown', outside, true);
     this.render();
   }
 
@@ -68,6 +83,7 @@ export class KeyPanel {
   close() {
     if (!this.isOpen()) return;
     this.stopRepeat();
+    this.closeMenu();
     this.panel.hidden = true;
     this.toggleButton.classList.remove('active');
     this.textInput.blur();
@@ -85,9 +101,11 @@ export class KeyPanel {
 
   render() {
     this.stopRepeat();
+    this.closeMenu();
     this.panel.textContent = '';
     this.modButtons = [];
     this.textButton = null;
+    this.moreButton = null;
     for (const spec of this.fnLayer ? FN : NORMAL) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -96,7 +114,7 @@ export class KeyPanel {
       if (spec.wide) b.classList.add('wide');
       if (spec.combo) b.classList.add('combo');
       if (spec.text) this.wireText(b);
-      else if (spec.action) this.wireAction(b, spec.action);
+      else if (spec.more) { b.classList.add('more'); this.moreButton = b; this.wireTap(b, () => this.toggleMenu()); }
       else this.wirePress(b, spec);
       if (spec.mod) { b.dataset.mod = spec.mod; this.modButtons.push(b); }
       if (spec.fn) b.classList.toggle('active', this.fnLayer);
@@ -127,20 +145,53 @@ export class KeyPanel {
     this.textButton = b;
   }
 
-  /// Paste and Image act on touchend (a user gesture, unlike a touch pointerdown) and never
-  /// take focus from the text field.
-  wireAction(b, action) {
+  isMenuOpen() { return this.menu !== null; }
+
+  /// The ⋯ menu (D41): a popover above the ⋯ key, inside the panel so it moves with it.
+  toggleMenu() {
+    if (this.menu) { this.closeMenu(); return; }
+    const menu = document.createElement('div');
+    menu.className = 'key-menu';
+    for (const spec of MORE_MENU) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'key';
+      b.textContent = spec.label;
+      if (spec.combo) b.classList.add('combo');
+      // The action runs before the menu closes, still inside the item's touchend.
+      this.wireTap(b, () => {
+        if (spec.action) this.onAction(spec.action); else this.press(spec);
+        this.closeMenu();
+      });
+      menu.append(b);
+    }
+    this.menu = menu;
+    this.moreButton?.classList.add('active');
+    this.panel.append(menu);
+  }
+
+  closeMenu() {
+    if (!this.menu) return;
+    this.menu.remove();
+    this.menu = null;
+    this.moreButton?.classList.remove('active');
+  }
+
+  /// ⋯ and its menu items act on touchend (a user gesture, unlike a touch pointerdown, which
+  /// the clipboard read and the file picker require, D36) and never take focus from the text
+  /// field.
+  wireTap(b, run) {
     let touched = false;
     b.addEventListener('touchstart', (e) => { e.preventDefault(); touched = true; b.classList.add('pressed'); }, { passive: false });
     b.addEventListener('touchend', (e) => {
       e.preventDefault();
       setTimeout(() => b.classList.remove('pressed'), PRESSED_MIN_MS);
-      if (touched) this.onAction(action);
+      if (touched) run();
       touched = false;
     });
     b.addEventListener('touchcancel', () => { touched = false; b.classList.remove('pressed'); });
     b.addEventListener('mousedown', (e) => e.preventDefault());
-    b.addEventListener('click', () => this.onAction(action)); // no touch: mouse or keyboard
+    b.addEventListener('click', run); // no touch: mouse or keyboard
   }
 
   /// Other keys act on press and never take focus, so the iOS keyboard stays open.

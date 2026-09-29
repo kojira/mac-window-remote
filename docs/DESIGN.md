@@ -1337,6 +1337,7 @@ On a real iPhone against the real Mac:
 ### D34. A 2×6 key panel toggled by ⌨︎
 > *Amended by §16 D36:* the normal layer has a third row, 📋 Paste and 🖼 Image.
 > *Amended by §17 D37:* that third row starts with ⌘F1 and ⌘Tab.
+> *Amended by §21 D41:* that third row is ⌘F1, ⌘Tab, space, ⏎, ⋯ (Paste, Image, ⌘Q menu).
 - **Why (user request, with a reference image):** the iOS keyboard cannot type Esc, Tab,
   arrows, F-keys, or ⌘/⌃/⌥ shortcuts such as ⌘C, ⌘V, and ⌃C. The panel gives those keys
   large targets. Custom buttons (D13) are not part of this step.
@@ -1529,6 +1530,7 @@ On a real iPhone against the real Mac:
 
 ### D36. 📋 Paste and 🖼 Image in the key panel
 > *Amended by §17 D37:* the third row is ⌘F1, ⌘Tab, 📋 Paste, 🖼 Image, two columns each.
+> *Amended by §21 D41:* 📋 Paste and 🖼 Image moved into the ⋯ menu; they still act on touch end.
 - **Why (user request):** "paste the iPhone clipboard contents into the text" and "upload an
   image and paste its path". Slices 2 and 3 (D11, D12) are implemented in the current
   architecture (§11–§15), with one default action: the content lands in the focused field of
@@ -1641,6 +1643,7 @@ On a real iPhone against the real Mac:
 ## 17. One-tap ⌘F1 and ⌘Tab (user decision; amends D34, D36)
 
 ### D37. Combo keys ⌘F1 and ⌘Tab in the key panel's third row
+> *Amended by §21 D41:* the third row is ⌘F1, ⌘Tab, space (two columns), ⏎, ⋯.
 - **Why (user request):** one tap for ⌘F1 and ⌘Tab instead of ⌘ then fn then F1 or ⌘ then tab.
   This is not the general custom-button editor (D13); the two keys are fixed.
 - **Placement (amends D36).** The normal layer's third row is four keys of two columns each:
@@ -1988,3 +1991,41 @@ On a real iPhone against the real Mac:
    malformed tiles skipped), running apps appended without duplicates; an unknown or stale id
    is rejected (no URL); `apps.list`/`app.open` decoding and `apps` encoding; the phone's
    `apps` decoding.
+
+## 21. space, ⏎, and a ⋯ menu in the key panel's third row (user decision; amends D36, D37)
+
+### D41. Third row ⌘F1 | ⌘Tab | space | ⏎ | ⋯, with 📋 Paste, 🖼 Image, and ⌘Q in ⋯
+- **Why (user request):** space and Return with panel modifiers (⇧⏎, ⌘⏎) without opening the
+  iOS keyboard, and ⌘Q in one tap.
+- **Layout (amends D36, D37).** The normal layer's third row, in six columns: **⌘F1**, **⌘Tab**,
+  **space** (two columns), **⏎**, **⋯**. Rows one and two, the fn layer, and the panel height
+  are unchanged.
+- **space and ⏎** are normal panel keys (D34): they send `Space` and `Enter` (the Mac's
+  existing `kVK_Space` and `kVK_Return`, not keypad Enter) on press with the active modifiers
+  (armed ones disarm, locked ones stay), never take focus, and auto-repeat like the arrows.
+- **⋯** opens a small menu anchored above the panel's right edge, with, top to bottom:
+  **📋 Paste**, **🖼 Image** (the D36 actions), and **⌘Q**. ⋯ is highlighted while it is open.
+  - Menu items act on touch end, the user gesture that the clipboard read and the file picker
+    require (D36), then the menu closes. ⌘Q is a combo key like ⌘F1 (D37): `{"t":"key",
+    "key":"q","mods":["cmd"]}` merged with the active modifiers; it does not repeat. It is in
+    the menu rather than the row so that a stray tap cannot quit the viewed app.
+  - Tapping ⋯ again, touching anywhere outside the menu, closing the panel, toggling fn, or the
+    page being hidden closes the menu without running anything. A touch outside also still does
+    what it was aimed at (the trackpad is not blocked).
+- **Mac side: unchanged** (`Space`, `Enter`, and `q` are already in §4.3).
+- **Source changes:** `web/keypanel.js` (row, menu), `web/style.css` (menu popover).
+
+### D41 acceptance criteria
+On a real iPhone against the real Mac:
+1. The third row shows ⌘F1, ⌘Tab, a wide space, ⏎, ⋯ with legible labels in portrait and
+   landscape; the panel height and the fn layer are unchanged.
+2. space types a space and ⏎ a Return in the focused field; ⇧ then ⏎ sends ⇧Return and ⇧
+   disarms; ⌘ then ⏎ sends ⌘Return. Holding space or ⏎ repeats after about 0.4 s.
+3. ⋯ shows 📋 Paste, 🖼 Image, ⌘Q above the panel. 📋 Paste and 🖼 Image work as in D36
+   (the iOS Paste callout and the photo picker appear); the menu closes after choosing.
+4. ⌘Q quits the viewed app on the Mac.
+5. ⋯ again, or a touch on the video, closes the menu without an action; the trackpad still
+   works; closing the panel with the menu open leaves no menu on the next open.
+6. *Unit:* the third row's keys; space and ⏎ with modifiers and repeat; Paste and Image fire
+   from the menu items' touch end (not touch start, not the row); ⌘Q's merged mods; outside
+   touch and panel close close the menu.
