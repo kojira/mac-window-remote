@@ -1647,7 +1647,8 @@ On a real iPhone against the real Mac:
   and `{"t":"key","key":"Tab","mods":["cmd"]}`. Active modifiers are merged, each once, in
   the order cmd, ctrl, opt, shift (armed ⇧ then ⌘Tab sends `["cmd","shift"]`; a locked ⌘
   does not repeat `cmd`). Armed modifiers then disarm; locked ones stay.
-- **Mac side: unchanged.** The D34 combo posting (`.hidSystemState` source, `.cghidEventTap`)
+- **Mac side: unchanged** (*amended by §18 D38:* F-keys and navigation keys now also carry
+  the Fn flag, which ⌘F1 needs to match the system shortcut). The D34 combo posting (`.hidSystemState` source, `.cghidEventTap`)
   posts ⌘ down (a `flagsChanged` with the command flag), Tab down and up with the command
   flag, then ⌘ up. Events posted at the HID tap pass through the window server like hardware
   input, so system hot keys such as ⌘Tab act. A ⌘Tab whose ⌘ is released at once is a quick
@@ -1657,7 +1658,7 @@ On a real iPhone against the real Mac:
   - The phone keeps showing the viewed window (the stream follows the window, not the front
     app), and the next input raises the viewed window again (D25). So ⌘Tab's effect is seen
     on the Mac screen, not on the phone, unless the viewed window is the one brought forward.
-    *Amended by §18 D38:* the viewer now follows the app that ⌘Tab brings forward.
+    *Amended by §18 D38:* the viewer now follows the window that ⌘Tab or ⌘F1 brings forward.
 - **Source changes:** `web/modifiers.js` (`mergeMods`), `web/keypanel.js` (two keys and the
   merge), `web/style.css` (four keys per row).
 
@@ -1673,28 +1674,43 @@ On a real iPhone against the real Mac:
 6. 📋 Paste and 🖼 Image still work as in D36.
 7. *Unit:* merging a combo key's mods with armed and locked modifiers.
 
-## 18. The viewer follows ⌘Tab (user decision; amends D37)
+## 18. The viewer follows ⌘Tab and window cycling (user decision; amends D37)
 
-### D38. After ⌘Tab or ⌘⇧Tab the view switches to the app that came to the front
+### D38. After ⌘Tab, ⌘F1, or ⌘` the view switches to the window that came to the front
 - **Why (user request, after using D37 on the iPhone):** ⌘Tab brought another app forward on
   the Mac, but the phone kept showing the old window, and the next tap raised the old window
   again (D25), undoing the switch.
-- **Trigger.** A `key` message whose key is `Tab` with `cmd` in `mods` (so ⌘Tab and ⌘⇧Tab,
-  from the combo key or from ⌘ then tab), while a window is viewed. It is posted through the
-  ordered input pipeline as before (D25, D34). Nothing else changes for other keys.
+- **Amendment (user QC of ⌘F1, approved):** ⌘F1 did nothing at all. The user's "Move focus to
+  next window" shortcut is ⌘F1, and macOS registers such shortcuts with the Fn flag
+  (`kCGEventFlagMaskSecondaryFn`), which a real Apple keyboard sets on F1–F12 and on the
+  navigation keys; our events lacked it, so the shortcut never matched.
+  - **Fix (all keys, D9/D34):** the key's own down and up events carry the flags a real
+    keyboard sets, in addition to the modifiers: Fn on F1–F12, Home, End, PageUp, PageDown,
+    forward Delete (and Help); Fn plus NumericPad on the four arrows. Modifier key events
+    are unchanged (`KeyMap.hardwareFlags`).
+  - ⌘F1 (and ⌘`, the macOS default for the same action) switches windows within the front
+    app, so the view follows it like ⌘Tab.
+- **Trigger.** A `key` message with `cmd` in `mods` whose key is `Tab`, `F1`, or `` ` ``
+  (so ⌘Tab, ⌘⇧Tab, ⌘F1, ⌘⇧F1, ⌘`, ⌘⇧`, from the combo keys or from ⌘ then the key), while a
+  window is viewed (`isWindowSwitch`). It is posted through the ordered input pipeline as
+  before (D25, D34). Nothing else changes for other keys.
   - Before posting it, the viewed window is brought to the front once (D25) and, if a raise
-    happened, the combo waits the same 80 ms as a click, so ⌘Tab switches away from the
-    viewed window's app and not from whatever was in front before.
+    happened, the combo waits the same 80 ms as a click, so the switch starts from the viewed
+    window and not from whatever was in front before.
 - **Mac: find the new window** (after the combo was posted without error):
-  1. Poll `NSWorkspace.shared.frontmostApplication` every 25 ms for at most 1 s until its pid
-     differs from the viewed window's app. Timeout: nothing happens (the view stays).
-  2. Take the on-screen window order (`CGWindowListCopyWindowInfo`, on-screen only, no
-     desktop elements, front to back) and pick the first entry that is owned by that pid,
-     is layer 0, is at least 50 × 50 pt, and is in the pickable window list
-     (`WindowCatalog.shareableWindows`, the same filter as the window list, which also
-     excludes the Mac app's own windows). None (e.g. Finder with only the desktop, an app
-     whose windows are all minimized or on another Space): nothing happens.
-  3. If the phone switched windows meanwhile (a slot or the list), or viewing stopped, or the
+  1. Take the pickable window ids once (`WindowCatalog.shareableWindows`, the same filter as
+     the window list, which also excludes the Mac app's own windows).
+  2. Every 25 ms for at most 1 s: read the front app's pid
+     (`NSWorkspace.shared.frontmostApplication`) and the on-screen window order
+     (`CGWindowListCopyWindowInfo`, on-screen only, no desktop elements, front to back), and
+     pick the front app's frontmost window: the first entry owned by that pid that is
+     layer 0, at least 50 × 50 pt, and pickable. The switch is seen when that window is not
+     the viewed window. This covers both cases: ⌘Tab (another app comes forward, so its
+     window differs) and ⌘F1 / ⌘` (the front app stays; another of its windows comes
+     forward). Comparing window ids, not app pids, is what makes the same-app case work.
+  3. Timeout (e.g. Finder with only the desktop, an app whose windows are all minimized or on
+     another Space, a single-window app on ⌘F1): nothing happens (the view stays).
+  4. If the phone switched windows meanwhile (a slot or the list), or viewing stopped, or the
      session closed, nothing happens.
 - **Mac: switch.** Send `{"t":"view.switched","windowId":…,"app":"…","title":"…"}` on the
   WebSocket, then switch the capture exactly as `view.start` does (D18, D33): the old capture
@@ -1708,13 +1724,15 @@ On a real iPhone against the real Mac:
   waits for the new window's first frame (as a slot switch does: fit on the new size, D21);
   the slot highlight and 📱 state follow the new window (D33, D35); the window list is
   refreshed, which re-resolves the slots and requests thumbnails. No toast when the view
-  stays; no other UI changes.
-- **Non-goals:** following app switches made on the Mac itself (keyboard or mouse there);
-  following ⌘` (window cycling) or other shortcuts that change the front window.
-- **Source changes:** `Protocol.swift` (`view.switched`), `Session.swift` (follow after the
-  combo), `MacBackend.swift` (wait for the front app, 80 ms after a raise),
-  `WindowCatalog.swift` (on-screen order, front window selection), `InputPipeline.swift`
-  (`isAppSwitch`); `web/app.js`, `web/slots.js` (`decodeViewSwitched`).
+  stays; no other UI changes. (Unchanged by the amendment.)
+- **Non-goals:** following switches made on the Mac itself (keyboard or mouse there);
+  reading the user's own shortcut settings (a remapped "Move focus to next window" other than
+  ⌘F1/⌘` is not followed); following other shortcuts that change the front window.
+- **Source changes:** `KeyMap.swift` (`hardwareFlags`, used by `strokes`), `Protocol.swift`
+  (`view.switched`), `Session.swift` (follow after the combo), `MacBackend.swift` (poll for
+  the switch, 80 ms after a raise), `WindowCatalog.swift` (on-screen order, switched window
+  selection), `InputPipeline.swift` (`isWindowSwitch`); `web/app.js`, `web/slots.js`
+  (`decodeViewSwitched`).
 
 ### D38 acceptance criteria
 On a real iPhone against the real Mac:
@@ -1727,7 +1745,14 @@ On a real iPhone against the real Mac:
    thumbnails refresh.
 5. If Y has no pickable window (e.g. Finder with only the desktop), the phone keeps showing
    A and no error appears.
-6. Other keys, ⌘F1, 📋 Paste, 🖼 Image, and slot switching are unchanged.
-7. *Unit:* front window selection from a sample on-screen order (front to back, layer 0,
-   owner pid, minimum size, pickable ids; none); `isAppSwitch`; `view.switched` encoding
-   and the phone's decoding.
+6. Viewing window A of an app with two or more windows, tap ⌘F1: the Mac brings the app's
+   next window B forward (the system "Move focus to next window" shortcut now fires), and
+   within about a second the phone shows B; the next tap goes to B, A is not raised.
+   ⌘ then ` behaves the same. With a single-window app, ⌘F1 changes nothing on the phone.
+7. F-keys, arrows, Home/End/PageUp/PageDown and forward Delete still act as before in apps
+   (e.g. arrows move the cursor, ⇧+arrows select); 📋 Paste, 🖼 Image, and slot switching are
+   unchanged.
+8. *Unit:* the Fn/NumericPad flags per key and on a combo's events; switched window
+   selection from a sample on-screen order (front to back, layer 0, minimum size, pickable
+   ids, front app's pid; same-app and other-app switches; not yet switched; none);
+   `isWindowSwitch`; `view.switched` encoding and the phone's decoding.
