@@ -179,7 +179,7 @@ actor Session {
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
 
-    // Image uploads (D36).
+    // Image and file uploads (D36, D42).
     private let uploads: UploadStore
     private var images = ImageUploadAssembler()
 
@@ -417,29 +417,46 @@ actor Session {
             log.info("clipboard paste received bytes=\(text.utf8.count, privacy: .public)")
             await pasteIntoViewedWindow(text, id: id, path: nil)
         case .imageChunk(let id, let size, let offset, let bytes):
-            if offset == 0, viewingWindowId == nil {
-                images.reject(id: id)
-                await sendUploadError(.windowNotFound, id: id)
+            await uploadChunk(id: id, size: size, offset: offset, bytes: bytes, fileName: nil)
+        case .fileChunk(let id, let size, let offset, let bytes, let name):
+            await uploadChunk(id: id, size: size, offset: offset, bytes: bytes, fileName: name)
+        }
+    }
+
+    /// An image (D36) or file (D42) chunk; `fileName` is nil for an image.
+    private func uploadChunk(id: String, size: Int, offset: Int, bytes: Data, fileName: String?) async {
+        if offset == 0, viewingWindowId == nil {
+            images.reject(id: id)
+            await sendUploadError(.windowNotFound, id: id)
+            return
+        }
+        let url: URL
+        switch images.receive(id: id, size: size, offset: offset, bytes: bytes, fileName: fileName) {
+        case .needMore, .ignored:
+            return
+        case .failed(let code):
+            await sendUploadError(code, id: id)
+            return
+        case .complete(let image, let type):
+            do {
+                url = try uploads.save(image, type: type)
+            } catch {
+                log.error("image save failed: \(String(describing: error), privacy: .public)")
+                await sendUploadError(.internal, id: id)
                 return
             }
-            switch images.receive(id: id, size: size, offset: offset, bytes: bytes) {
-            case .needMore, .ignored:
-                break
-            case .failed(let code):
-                await sendUploadError(code, id: id)
-            case .complete(let image, let type):
-                let url: URL
-                do {
-                    url = try uploads.save(image, type: type)
-                } catch {
-                    log.error("image save failed: \(String(describing: error), privacy: .public)")
-                    await sendUploadError(.internal, id: id)
-                    return
-                }
-                log.info("image saved type=\(type.rawValue, privacy: .public) bytes=\(image.count, privacy: .public)")
-                await pasteIntoViewedWindow(url.path, id: id, path: url.path)
+            log.info("image saved type=\(type.rawValue, privacy: .public) bytes=\(image.count, privacy: .public)")
+        case .completeFile(let data, let name):
+            do {
+                url = try uploads.saveFile(data, name: name)
+            } catch {
+                log.error("file save failed: \(String(describing: error), privacy: .public)")
+                await sendUploadError(.internal, id: id)
+                return
             }
+            log.info("file saved bytes=\(data.count, privacy: .public)")
         }
+        await pasteIntoViewedWindow(url.path, id: id, path: url.path)
     }
 
     /// Sets the Mac clipboard and sends ⌘V to the viewed window through the ordered input
@@ -462,7 +479,7 @@ actor Session {
         case .windowNotFound: message = "Open a window first"
         case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
         case .badRequest: message = "Bad request"
-        default: message = "Could not save the image"
+        default: message = "Could not save the upload"
         }
         await send(.error(code: code, message: message, id: id))
     }

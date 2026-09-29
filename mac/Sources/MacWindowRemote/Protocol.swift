@@ -262,6 +262,9 @@ enum BinaryClientMessage: Equatable {
     case clipboardPaste(id: String, text: String)
     /// One chunk of an image; `size` is the whole image, `offset` where `bytes` go.
     case imageChunk(id: String, size: Int, offset: Int, bytes: Data)
+    /// One chunk of any file (D42); `name` is the phone's file name on the chunk at offset 0 and
+    /// empty on the others.
+    case fileChunk(id: String, size: Int, offset: Int, bytes: Data, name: String)
 
     /// Clipboard text is at most 1 MiB of UTF-8 (D11).
     static let maxClipboardBytes = 1 << 20
@@ -274,6 +277,7 @@ enum BinaryClientMessage: Equatable {
         let id: String?
         let size: Int?
         let offset: Int?
+        let name: String?
     }
 
     /// Decodes the framing, the header, and its values. A clipboard payload over 1 MiB throws
@@ -298,13 +302,14 @@ enum BinaryClientMessage: Equatable {
                 throw ProtocolError.invalidValue("text")
             }
             return .clipboardPaste(id: id, text: text)
-        case "image.chunk":
+        case "image.chunk", "file.chunk":
             guard let size = h.size, size > 0 else { throw ProtocolError.invalidValue("size") }
             guard let offset = h.offset, offset >= 0 else { throw ProtocolError.invalidValue("offset") }
             guard !payload.isEmpty, payload.count <= maxChunkBytes, offset + payload.count <= size else {
                 throw ProtocolError.invalidValue("chunk")
             }
-            return .imageChunk(id: id, size: size, offset: offset, bytes: payload)
+            if h.t == "image.chunk" { return .imageChunk(id: id, size: size, offset: offset, bytes: payload) }
+            return .fileChunk(id: id, size: size, offset: offset, bytes: payload, name: offset == 0 ? h.name ?? "" : "")
         default:
             throw ProtocolError.unknownType(h.t)
         }

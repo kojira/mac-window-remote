@@ -1,7 +1,7 @@
 import Foundation
 
-// Image uploads (DESIGN.md D12, amended by D36): type sniffing, chunk assembly, and the temp
-// directory the images are saved in.
+// Image and file uploads (DESIGN.md D12, amended by D36 and D42): type sniffing, chunk
+// assembly, file name sanitizing, and the temp directory the uploads are saved in.
 
 /// An accepted image type, sniffed from the magic bytes (D12).
 enum ImageType: String, Equatable, Sendable {
@@ -32,15 +32,19 @@ enum ImageType: String, Equatable, Sendable {
     }
 }
 
-/// Collects the chunks of one image upload (D36). Chunks arrive in order on the WebSocket; a
-/// chunk at offset 0 starts a new upload and replaces an unfinished one. After an upload
-/// fails, its remaining chunks (already on the way) are ignored.
+/// Collects the chunks of one image or file upload (D36, D42). Chunks arrive in order on the
+/// WebSocket; a chunk at offset 0 starts a new upload and replaces an unfinished one. After an
+/// upload fails, its remaining chunks (already on the way) are ignored.
 struct ImageUploadAssembler {
     static let maxImageBytes = 25 << 20
+    /// Any file (D42) is at most 100 MiB; it is not sniffed.
+    static let maxFileBytes = 100 << 20
 
     enum Step: Equatable {
         case needMore
         case complete(Data, ImageType)
+        /// A file upload (D42) with the name the phone sent (not yet sanitized).
+        case completeFile(Data, name: String)
         case failed(ErrorCode)
         /// A chunk of an upload that already failed.
         case ignored
@@ -49,29 +53,41 @@ struct ImageUploadAssembler {
     private var id: String?
     private var size = 0
     private var type: ImageType?
+    private var fileName: String?
     private var buffer = Data()
     private var failedId: String?
 
-    mutating func receive(id: String, size: Int, offset: Int, bytes: Data) -> Step {
+    /// `fileName` is nil for an image chunk; for a file chunk it is the name at offset 0 and
+    /// empty on later chunks.
+    mutating func receive(id: String, size: Int, offset: Int, bytes: Data, fileName: String? = nil) -> Step {
         if offset == 0 {
             reset()
-            guard size <= Self.maxImageBytes else { return fail(id, .tooLarge) }
-            guard let type = ImageType.sniff(bytes) else { return fail(id, .unsupportedType) }
+            if let fileName {
+                guard size <= Self.maxFileBytes else { return fail(id, .tooLarge) }
+                self.fileName = fileName
+            } else {
+                guard size <= Self.maxImageBytes else { return fail(id, .tooLarge) }
+                guard let type = ImageType.sniff(bytes) else { return fail(id, .unsupportedType) }
+                self.type = type
+            }
             self.id = id
             self.size = size
-            self.type = type
             buffer.reserveCapacity(size)
         } else {
             if id == failedId { return .ignored }
-            guard id == self.id, size == self.size, offset == buffer.count else {
+            guard id == self.id, size == self.size, offset == buffer.count,
+                  (fileName == nil) == (self.fileName == nil) else {
                 reset()
                 return fail(id, .badRequest)
             }
         }
         buffer.append(bytes)
-        guard buffer.count == size, let type else { return .needMore }
+        guard buffer.count == size else { return .needMore }
         let data = buffer
+        let (type, name) = (self.type, self.fileName)
         reset()
+        if let name { return .completeFile(data, name: name) }
+        guard let type else { return .needMore }
         return .complete(data, type)
     }
 
@@ -90,12 +106,14 @@ struct ImageUploadAssembler {
         id = nil
         size = 0
         type = nil
+        fileName = nil
         buffer = Data()
     }
 }
 
-/// The uploads directory under the per-user `$TMPDIR` (D12): mode 0700, files named
-/// `img-YYYYMMDD-HHMMSS-<4 hex>.<ext>`, removed after 24 h.
+/// The uploads directory under the per-user `$TMPDIR` (D12): mode 0700, images named
+/// `img-YYYYMMDD-HHMMSS-<4 hex>.<ext>`, other files (D42) in `<UUID>/<original name>`,
+/// removed after 24 h.
 struct UploadStore: Sendable {
     let directory: URL
 
@@ -141,17 +159,58 @@ struct UploadStore: Sendable {
         }
     }
 
-    /// Deletes regular files directly in the directory that are older than `maxAge`. Nothing
-    /// outside it is touched: subdirectories and symbolic links are skipped. Returns the count.
+    /// A file name longer than this many UTF-8 bytes is shortened (APFS allows 255).
+    static let maxFileNameBytes = 200
+
+    /// The name a file upload is saved under (D42): the last path component only, without
+    /// control or format characters, leading dots, or surrounding spaces, at most
+    /// `maxFileNameBytes` (the extension is kept), and "file" when nothing is left.
+    static func sanitizedFileName(_ raw: String) -> String {
+        let base = raw.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init) ?? ""
+        var name = String(String.UnicodeScalarView(base.unicodeScalars.filter {
+            !CharacterSet.controlCharacters.contains($0)
+        }))
+        while true {
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            let undotted = String(trimmed.drop(while: { $0 == "." }))
+            if undotted == name { break }
+            name = undotted
+        }
+        if name.utf8.count > maxFileNameBytes {
+            let ext = (name as NSString).pathExtension
+            let suffix = !ext.isEmpty && ext.utf8.count <= 16 ? "." + ext : ""
+            var stem = suffix.isEmpty ? name : String(name.dropLast(suffix.count))
+            while stem.utf8.count + suffix.utf8.count > maxFileNameBytes { stem.removeLast() }
+            name = stem.trimmingCharacters(in: .whitespaces) + suffix
+        }
+        return name.isEmpty ? "file" : name
+    }
+
+    /// Writes a file upload (D42) as `<UUID>/<sanitized name>` in a new subdirectory (mode
+    /// 0700), so names never collide and the pasted path ends with the real name. The bytes are
+    /// only written, never opened or interpreted.
+    func saveFile(_ data: Data, name: String) throws -> URL {
+        try prepareDirectory()
+        let fm = FileManager.default
+        let folder = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let url = folder.appendingPathComponent(Self.sanitizedFileName(name), isDirectory: false)
+        try data.write(to: url, options: .withoutOverwriting)
+        return url
+    }
+
+    /// Deletes what is older than `maxAge` directly in the directory: regular files, and the
+    /// `<UUID>` subdirectories of file uploads (D42) with their contents. Nothing outside it is
+    /// touched: symbolic links and other subdirectories are skipped. Returns the count.
     @discardableResult
     func removeExpired(now: Date = Date()) -> Int {
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .contentModificationDateKey]
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
         guard let items = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys) else { return 0 }
         var removed = 0
         for url in items {
-            guard let v = try? url.resourceValues(forKeys: Set(keys)),
-                  v.isRegularFile == true, v.isSymbolicLink != true,
+            guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isSymbolicLink != true,
+                  v.isRegularFile == true || (v.isDirectory == true && UUID(uuidString: url.lastPathComponent) != nil),
                   let modified = v.contentModificationDate,
                   now.timeIntervalSince(modified) > Self.maxAge else { continue }
             if (try? fm.removeItem(at: url)) != nil { removed += 1 }
