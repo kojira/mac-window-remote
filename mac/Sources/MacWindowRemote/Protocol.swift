@@ -42,7 +42,8 @@ enum ClientMessage: Equatable {
     case rightClick
     case drag(start: Bool)
     case text(String)
-    case key(name: String)
+    /// `mods` are distinct and in `KeyModifier` case order (D34).
+    case key(name: String, mods: [KeyModifier])
 }
 
 struct RemoteCandidate: Equatable, Sendable {
@@ -152,9 +153,13 @@ extension ClientMessage {
         case "key":
             let name = try require(e.key, "key")
             guard KeyMap.keyCode(for: name) != nil else { throw ProtocolError.invalidValue("key") }
-            // Modifier combos arrive with the key bar in slice 4.
-            guard (e.mods ?? []).isEmpty else { throw ProtocolError.invalidValue("mods") }
-            return .key(name: name)
+            // D34: each mod is known and appears at most once.
+            let raw = e.mods ?? []
+            let mods = raw.compactMap(KeyModifier.init(rawValue:))
+            guard mods.count == raw.count, Set(mods).count == mods.count else {
+                throw ProtocolError.invalidValue("mods")
+            }
+            return .key(name: name, mods: KeyModifier.allCases.filter(mods.contains))
         default:
             throw ProtocolError.unknownType(e.t)
         }

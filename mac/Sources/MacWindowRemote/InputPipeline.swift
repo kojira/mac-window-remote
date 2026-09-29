@@ -13,7 +13,7 @@ struct InputAction: Sendable {
         case dragStart
         case dragEnd
         case text(String)
-        case key(String)
+        case key(String, mods: [KeyModifier])
     }
     let windowId: UInt32
     let cursor: CursorState
@@ -26,7 +26,7 @@ struct InputAction: Sendable {
 enum DiscreteInput: Sendable {
     case click, rightClick, dragStart, dragEnd
     case text(String)
-    case key(String)
+    case key(String, mods: [KeyModifier])
 }
 
 /// The input actor (D24, D25). It owns the cursor for the viewed window, coalesces moves and
@@ -113,7 +113,7 @@ actor InputPipeline {
         case .dragStart: kind = .dragStart
         case .dragEnd: kind = .dragEnd
         case .text(let text): kind = .text(text)
-        case .key(let name): kind = .key(name)
+        case .key(let name, let mods): kind = .key(name, mods: mods)
         }
         discrete.append(InputAction(windowId: target, cursor: cursor, kind: kind))
         guard discreteTask == nil else { return }

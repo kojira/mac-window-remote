@@ -11,7 +11,22 @@ import Testing
         #expect(try decode(#"{"t":"windows.list"}"#) == .windowsList)
         #expect(try decode(#"{"t":"view.start","windowId":1234}"#) == .viewStart(windowId: 1234))
         #expect(try decode(#"{"t":"text","text":"日本語"}"#) == .text("日本語"))
-        #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace"))
+        #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace", mods: []))
+    }
+
+    /// D34: `key` with optional `mods`, normalized to cmd, ctrl, opt, shift order.
+    @Test func decodesKeyWithMods() throws {
+        #expect(try decode(#"{"t":"key","key":"c","mods":["cmd"]}"#) == .key(name: "c", mods: [.cmd]))
+        #expect(try decode(#"{"t":"key","key":"z","mods":["shift","cmd"]}"#) == .key(name: "z", mods: [.cmd, .shift]))
+        #expect(try decode(#"{"t":"key","key":"F5","mods":[]}"#) == .key(name: "F5", mods: []))
+        #expect(try decode(#"{"t":"key","key":"ArrowLeft","mods":["opt","ctrl"]}"#) == .key(name: "ArrowLeft", mods: [.ctrl, .opt]))
+        #expect(throws: ProtocolError.invalidValue("mods")) { try decode(#"{"t":"key","key":"c","mods":["meta"]}"#) }
+        #expect(throws: ProtocolError.invalidValue("mods")) { try decode(#"{"t":"key","key":"c","mods":["cmd","cmd"]}"#) }
+        #expect(throws: ProtocolError.malformed) { try decode(#"{"t":"key","key":"c","mods":"cmd"}"#) }
+        #expect(throws: ProtocolError.invalidValue("key")) { try decode(#"{"t":"key","key":"C","mods":["cmd"]}"#) }
+        #expect(throws: ProtocolError.wrongChannel("key")) {
+            try ClientMessage.decode(Data(#"{"t":"key","key":"c","mods":["cmd"]}"#.utf8), on: .socket)
+        }
     }
 
     /// D28 input messages.
