@@ -8,6 +8,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var viewing: WindowItem?
     private let displayAssertion = DisplayAssertion()
+    private let resizer = WindowResizer()
 
     init(rtc: RTCHost, onViewing: @escaping @Sendable (WindowItem?) -> Void) {
         self.rtc = rtc
@@ -53,6 +54,18 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             results.append((id, await WindowThumbnail.jpeg(of: window)))
         }
         return results
+    }
+
+    func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome {
+        guard Permissions.accessibility else { return .failed(.permissionAccessibility) }
+        guard let pid = pid(for: windowId) else { return .failed(.windowNotFound) }
+        return await resizer.fit(windowId: windowId, pid: pid, aspect: aspect)
+    }
+
+    func restoreWindow(windowId: UInt32) async -> WindowFitOutcome {
+        guard Permissions.accessibility else { return .failed(.permissionAccessibility) }
+        guard let pid = pid(for: windowId) else { return .failed(.windowNotFound) }
+        return await resizer.restore(windowId: windowId, pid: pid)
     }
 
     func viewingChanged(_ window: WindowItem?) {

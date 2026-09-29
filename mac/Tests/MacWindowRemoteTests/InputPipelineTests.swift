@@ -20,6 +20,8 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     func releaseButton() async {}
     func thumbnails(windowIds: [UInt32]) async -> [(windowId: UInt32, jpeg: Data?)] { [] }
     func viewingChanged(_ window: WindowItem?) {}
+    func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome { .failed(.windowNotFound) }
+    func restoreWindow(windowId: UInt32) async -> WindowFitOutcome { .failed(.windowNotFound) }
     func makePeer() -> RTCPeer? { nil }
 }
 

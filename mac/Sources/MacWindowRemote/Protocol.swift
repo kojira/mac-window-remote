@@ -19,6 +19,12 @@ enum ErrorCode: String, Codable {
     case permissionAccessibility = "permission_accessibility"
     /// The server could not answer a WebRTC offer (D28).
     case rtcFailed = "rtc_failed"
+    /// D35: the window's size cannot be set (or no AX window matches it).
+    case windowNotResizable = "window_not_resizable"
+    /// D35: full-screen windows are not resized.
+    case windowFullscreen = "window_fullscreen"
+    /// D35: restore without a saved frame.
+    case windowNotFitted = "window_not_fitted"
     case `internal` = "internal"
 }
 
@@ -44,6 +50,10 @@ enum ClientMessage: Equatable {
     case text(String)
     /// `mods` are distinct and in `KeyModifier` case order (D34).
     case key(name: String, mods: [KeyModifier])
+    /// Resize the viewed window to `aspect` (width / height) on its screen (D35).
+    case windowFitPhone(aspect: Double)
+    /// Put the viewed window back to its frame before the first fit (D35).
+    case windowRestore
 }
 
 struct RemoteCandidate: Equatable, Sendable {
@@ -84,6 +94,7 @@ extension ClientMessage {
         let text: String?
         let key: String?
         let mods: [String]?
+        let aspect: Double?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -160,6 +171,12 @@ extension ClientMessage {
                 throw ProtocolError.invalidValue("mods")
             }
             return .key(name: name, mods: KeyModifier.allCases.filter(mods.contains))
+        case "window.fitPhone":
+            let aspect = try require(e.aspect, "aspect")
+            guard aspect.isFinite, WindowFit.aspectRange.contains(aspect) else { throw ProtocolError.invalidValue("aspect") }
+            return .windowFitPhone(aspect: aspect)
+        case "window.restore":
+            return .windowRestore
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -173,7 +190,7 @@ extension ClientMessage {
         switch self {
         case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce: return .socket
         case .move, .scroll: return .motion
-        case .click, .rightClick, .drag, .text, .key: return .control
+        case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore: return .control
         }
     }
 
@@ -192,6 +209,8 @@ extension ClientMessage {
         case .drag: return "drag"
         case .text: return "text"
         case .key: return "key"
+        case .windowFitPhone: return "window.fitPhone"
+        case .windowRestore: return "window.restore"
         }
     }
 }
@@ -232,6 +251,8 @@ enum ServerMessage {
     case rtcIce(pc: Int, candidate: LocalCandidate?)
     /// A slot window's thumbnail; nil when there is none (D33).
     case thumb(windowId: UInt32, jpeg: Data?)
+    /// Result of `window.fitPhone` / `window.restore` (D35).
+    case windowFit(windowId: UInt32, state: WindowFitState, clamped: Bool)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -243,6 +264,9 @@ enum ServerMessage {
     private struct Cursor: Encodable { let t = "cursor"; let u: Double; let v: Double; let seq: Int }
     private struct Thumb: Encodable {
         let t = "thumb"; let windowId: UInt32; let jpeg: String?; let missing: Bool?
+    }
+    private struct Fit: Encodable {
+        let t = "window.fit"; let windowId: UInt32; let state: WindowFitState; let clamped: Bool
     }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
@@ -279,6 +303,8 @@ enum ServerMessage {
         case .rtcIce(let pc, let candidate): data = try? encoder.encode(Ice(pc: pc, candidate: candidate))
         case .thumb(let id, let jpeg):
             data = try? encoder.encode(Thumb(windowId: id, jpeg: jpeg?.base64EncodedString(), missing: jpeg == nil ? true : nil))
+        case .windowFit(let id, let state, let clamped):
+            data = try? encoder.encode(Fit(windowId: id, state: state, clamped: clamped))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

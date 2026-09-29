@@ -52,8 +52,15 @@ export class Viewer {
     this.video.style.width = `${width}px`;
     this.video.style.height = `${height}px`;
     this.video.classList.remove('waiting');
-    if (!hadFrame) this.fit();
+    if (!hadFrame || this.fitAtNextSize) this.fit();
     else { this.scale = this.fitScale() * zoom; this.clampAndApply(); }
+    this.fitAtNextSize = false;
+  }
+
+  /// The Mac resized the window (D35): fit now, and fit again when the new size arrives.
+  fitResized() {
+    this.fitAtNextSize = true;
+    this.fit();
   }
 
   /// Leaving the viewer or switching windows: forget the image, the cursor, and any drag.
@@ -67,6 +74,7 @@ export class Viewer {
     this.endInput();
     this.waitingForFrame = true;
     this.frameToken = null;
+    this.fitAtNextSize = false;
   }
 
   /// The Mac started streaming the selected window: show the next frame that arrives, so a
