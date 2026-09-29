@@ -1,11 +1,13 @@
-// Clipboard text and image uploads to the Mac (DESIGN.md D36): binary WebSocket framing
+// Clipboard text, image, and file uploads to the Mac (DESIGN.md D36, D42): binary WebSocket framing
 // (§4.1) and the size limits. Pure functions; app.js does the sending.
 
 /// Clipboard text is at most 1 MiB of UTF-8 (D11).
 export const CLIPBOARD_MAX_BYTES = 1 << 20;
 /// Images are at most 25 MiB (D12).
 export const IMAGE_MAX_BYTES = 25 << 20;
-/// Images are sent in chunks of this size, so the WebSocket never carries a huge message.
+/// Any file (D42) is at most 100 MiB.
+export const FILE_MAX_BYTES = 100 << 20;
+/// Images and files are sent in chunks of this size, so the WebSocket never carries a huge message.
 export const IMAGE_CHUNK_BYTES = 256 << 10;
 
 /// `[uint32 BE headerLength][header JSON][payload]` (§4.1).
@@ -27,9 +29,24 @@ export function clipboardMessage(id, text) {
 
 /// The `image.chunk` messages of an image, in order.
 export function* imageChunkMessages(id, bytes, chunkBytes = IMAGE_CHUNK_BYTES) {
+  yield* chunkMessages({ t: 'image.chunk', id }, bytes, chunkBytes);
+}
+
+/// The `file.chunk` messages of any file (D42), in order; the first one carries the file name
+/// (the Mac sanitizes it). Only its last 200 code points are sent, so the header stays under
+/// the Mac's 1 KiB limit and the extension is kept.
+export function* fileChunkMessages(id, name, bytes, chunkBytes = IMAGE_CHUNK_BYTES) {
+  yield* chunkMessages({ t: 'file.chunk', id }, bytes, chunkBytes, Array.from(name).slice(-FILE_NAME_MAX_CHARS).join(''));
+}
+
+const FILE_NAME_MAX_CHARS = 200;
+
+function* chunkMessages(base, bytes, chunkBytes, name) {
   for (let offset = 0; offset < bytes.length; offset += chunkBytes) {
     const chunk = bytes.subarray(offset, Math.min(offset + chunkBytes, bytes.length));
-    yield { offset, end: offset + chunk.length, data: encodeBinaryMessage({ t: 'image.chunk', id, size: bytes.length, offset }, chunk) };
+    const header = { ...base, size: bytes.length, offset };
+    if (name != null && offset === 0) header.name = name;
+    yield { offset, end: offset + chunk.length, data: encodeBinaryMessage(header, chunk) };
   }
 }
 

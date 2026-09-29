@@ -120,7 +120,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
   background: rgba(44, 44, 46, 0.97); border-radius: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
 .key-menu .key { height: var(--key-h); padding: 0 14px; text-align: left; font-size: 18px; }
 /* D36: the image picker is opened by 🖼; it stays rendered (not display: none) so iOS opens it. */
-#image-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
+#image-file, #any-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
 /* D36: the clipboard fallback sheet (D5), near the top so the iOS keyboard does not cover it. */
 #paste-sheet { position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, 0.5); }
 #paste-sheet .sheet { position: absolute; left: calc(env(safe-area-inset-left) + 12px); right: calc(env(safe-area-inset-right) + 12px);

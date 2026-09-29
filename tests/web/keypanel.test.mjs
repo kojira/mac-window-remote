@@ -1,5 +1,5 @@
 // Unit tests for the key panel's third row and ⋯ menu (DESIGN.md D41): space and ⏎ are keys
-// with modifiers and repeat; 📋 Paste, 🖼 Image, and ⌘Q run from the menu items' touchend.
+// with modifiers and repeat; 📋 Paste, 🖼 Image, 📎 File (D42), and ⌘Q run from the menu items' touchend.
 // A small fake DOM stands in for the browser. Run: node --test tests/web
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -91,10 +91,10 @@ test('space and ⏎ send Space and Enter with the active modifiers, then repeat 
   assert.deepEqual(sent, [['Enter', ['shift']], ['Space', ['cmd']], ['Space', ['cmd']], ['Space', ['cmd']]]);
 });
 
-test('⋯ opens a menu with 📋 Paste, 🖼 Image, ⌘Q; ⋯ again closes it', () => {
+test('⋯ opens a menu with 📋 Paste, 🖼 Image, 📎 File, ⌘Q; ⋯ again closes it', () => {
   const { kp, key, tap } = setup();
   tap(key('⋯'));
-  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '🖼 Image', '⌘Q']);
+  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '🖼 Image', '📎 File', '⌘Q']);
   assert.ok(key('⋯').classList.contains('active'));
   tap(key('⋯'));
   assert.equal(kp.isMenuOpen(), false);
@@ -113,6 +113,17 @@ test('Paste and Image run inside the menu item touchend, then the menu closes', 
   tap(key('⋯'));
   tap(item('🖼 Image'));
   assert.deepEqual(actions, ['paste', 'image']);
+  assert.equal(kp.isMenuOpen(), false);
+});
+
+test('📎 File runs its action (the file picker) on the item touchend, not touchstart (D42)', () => {
+  const { kp, key, item, tap, actions } = setup();
+  tap(key('⋯'));
+  const file = item('📎 File');
+  file.dispatch('touchstart');
+  assert.deepEqual(actions, []);
+  file.dispatch('touchend');
+  assert.deepEqual(actions, ['file']);
   assert.equal(kp.isMenuOpen(), false);
 });
 
