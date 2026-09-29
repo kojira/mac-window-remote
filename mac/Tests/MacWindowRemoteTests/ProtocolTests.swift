@@ -60,6 +60,29 @@ import Testing
         #expect(throws: ProtocolError.unknownType("frame.ack")) { try decode(#"{"t":"frame.ack","frameId":57}"#) }
     }
 
+    /// D33: thumbnail requests carry at most three window ids.
+    @Test func decodesThumbnailRequests() throws {
+        #expect(try decode(#"{"t":"thumbs.request","windowIds":[1,2,3]}"#) == .thumbsRequest(windowIds: [1, 2, 3]))
+        #expect(try decode(#"{"t":"thumbs.request","windowIds":[]}"#) == .thumbsRequest(windowIds: []))
+        #expect(throws: ProtocolError.invalidValue("windowIds")) { try decode(#"{"t":"thumbs.request","windowIds":[1,2,3,4]}"#) }
+        #expect(throws: ProtocolError.invalidValue("windowIds")) { try decode(#"{"t":"thumbs.request"}"#) }
+        #expect(throws: ProtocolError.wrongChannel("thumbs.request")) {
+            try ClientMessage.decode(Data(#"{"t":"thumbs.request","windowIds":[1]}"#.utf8), on: .control)
+        }
+    }
+
+    @Test func encodesThumbnails() throws {
+        func object(_ m: ServerMessage) throws -> [String: Any] {
+            try JSONSerialization.jsonObject(with: Data(m.jsonString().utf8)) as! [String: Any]
+        }
+        let thumb = try object(.thumb(windowId: 9, jpeg: Data([0xFF, 0xD8, 0xFF])))
+        #expect(thumb["t"] as? String == "thumb" && thumb["windowId"] as? Int == 9)
+        #expect(thumb["jpeg"] as? String == "/9j/")
+        #expect(thumb["missing"] == nil)
+        let missing = try object(.thumb(windowId: 9, jpeg: nil))
+        #expect(missing["missing"] as? Bool == true && missing["jpeg"] == nil)
+    }
+
     /// D22: each message type is accepted only on the channel that carries it.
     @Test func messagesAreAcceptedOnlyOnTheirChannel() throws {
         func on(_ channel: MessageChannel, _ json: String) throws -> ClientMessage {

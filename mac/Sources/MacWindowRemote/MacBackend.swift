@@ -40,6 +40,21 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return .started(capture, WindowCatalog.item(for: window))
     }
 
+    func thumbnails(windowIds: [UInt32]) async -> [(windowId: UInt32, jpeg: Data?)] {
+        // Minimized windows and other Spaces are not in the on-screen list, so they get none.
+        let windows = (try? await WindowCatalog.shareableWindows()) ?? []
+        var results: [(windowId: UInt32, jpeg: Data?)] = []
+        for id in windowIds {
+            guard !Task.isCancelled else { break }
+            guard let window = windows.first(where: { $0.windowID == id }) else {
+                results.append((id, nil))
+                continue
+            }
+            results.append((id, await WindowThumbnail.jpeg(of: window)))
+        }
+        return results
+    }
+
     func viewingChanged(_ window: WindowItem?) {
         lock.lock()
         viewing = window

@@ -28,6 +28,8 @@ enum ClientMessage: Equatable {
     case windowsList
     case viewStart(windowId: UInt32)
     case viewStop
+    /// Thumbnails of the quick-switch slot windows, at most `maxThumbnailRequest` (D33).
+    case thumbsRequest(windowIds: [UInt32])
     /// WebRTC offer for peer connection number `pc` (D22).
     case rtcOffer(pc: Int, sdp: String)
     /// Trickled ICE candidate; nil is the end of candidates (D22).
@@ -66,6 +68,7 @@ extension ClientMessage {
     private struct Envelope: Decodable {
         let t: String
         let windowId: UInt32?
+        let windowIds: [UInt32]?
         let pc: Int?
         let sdp: String?
         let candidate: String?
@@ -118,6 +121,10 @@ extension ClientMessage {
             return .viewStart(windowId: try require(e.windowId, "windowId"))
         case "view.stop":
             return .viewStop
+        case "thumbs.request":
+            let ids = try require(e.windowIds, "windowIds")
+            guard ids.count <= maxThumbnailRequest else { throw ProtocolError.invalidValue("windowIds") }
+            return .thumbsRequest(windowIds: ids)
         case "rtc.offer":
             return .rtcOffer(pc: try peerNumber(e.pc), sdp: try require(e.sdp, "sdp"))
         case "rtc.ice":
@@ -153,10 +160,13 @@ extension ClientMessage {
         }
     }
 
+    /// The phone has three quick-switch slots (D33).
+    static let maxThumbnailRequest = 3
+
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .rtcOffer, .rtcIce: return .socket
+        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce: return .socket
         case .move, .scroll: return .motion
         case .click, .rightClick, .drag, .text, .key: return .control
         }
@@ -167,6 +177,7 @@ extension ClientMessage {
         case .windowsList: return "windows.list"
         case .viewStart: return "view.start"
         case .viewStop: return "view.stop"
+        case .thumbsRequest: return "thumbs.request"
         case .rtcOffer: return "rtc.offer"
         case .rtcIce: return "rtc.ice"
         case .move: return "move"
@@ -214,6 +225,8 @@ enum ServerMessage {
     case rtcAnswer(pc: Int, sdp: String)
     /// Local ICE candidate; nil is the end of candidates (D22).
     case rtcIce(pc: Int, candidate: LocalCandidate?)
+    /// A slot window's thumbnail; nil when there is none (D33).
+    case thumb(windowId: UInt32, jpeg: Data?)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -223,6 +236,9 @@ enum ServerMessage {
     private struct Failure: Encodable { let t = "error"; let id: String?; let code: ErrorCode; let message: String }
     private struct Ping: Encodable { let t = "ping" }
     private struct Cursor: Encodable { let t = "cursor"; let u: Double; let v: Double; let seq: Int }
+    private struct Thumb: Encodable {
+        let t = "thumb"; let windowId: UInt32; let jpeg: String?; let missing: Bool?
+    }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
         let pc: Int
@@ -256,6 +272,8 @@ enum ServerMessage {
         case .cursor(let u, let v, let seq): data = try? encoder.encode(Cursor(u: u, v: v, seq: seq))
         case .rtcAnswer(let pc, let sdp): data = try? encoder.encode(Answer(pc: pc, sdp: sdp))
         case .rtcIce(let pc, let candidate): data = try? encoder.encode(Ice(pc: pc, candidate: candidate))
+        case .thumb(let id, let jpeg):
+            data = try? encoder.encode(Thumb(windowId: id, jpeg: jpeg?.base64EncodedString(), missing: jpeg == nil ? true : nil))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

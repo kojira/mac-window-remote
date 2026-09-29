@@ -18,6 +18,9 @@ protocol SessionBackend: Sendable {
     func focus(windowId: UInt32) async
     /// Posts `leftMouseUp` if a drag holds the button (D26).
     func releaseButton() async
+    /// A small JPEG of each window, in request order; nil for a window that is not on screen
+    /// or cannot be captured (D33).
+    func thumbnails(windowIds: [UInt32]) async -> [(windowId: UInt32, jpeg: Data?)]
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
     /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
@@ -130,6 +133,7 @@ actor Session {
     private var capture: (any CaptureHandle)?
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
+    private var thumbsTask: Task<Void, Never>?
 
     // WebRTC (D22, D27): the one peer connection, numbered by the client.
     private var peer: RTCPeer?
@@ -225,6 +229,8 @@ actor Session {
             }
         case .viewStart(let windowId):
             await startViewing(windowId)
+        case .thumbsRequest(let windowIds):
+            sendThumbnails(windowIds)
         case .viewStop:
             stopViewing()
             if let id = viewingWindowId { await send(.viewState(windowId: id, state: .stopped, reason: nil)) }
@@ -250,6 +256,24 @@ actor Session {
             await input.submit(.text(text))
         case .key(let name):
             await input.submit(.key(name))
+        }
+    }
+
+    // MARK: Thumbnails (D33)
+
+    /// A newer request cancels the replies of one still in progress.
+    private func sendThumbnails(_ windowIds: [UInt32]) {
+        thumbsTask?.cancel()
+        let backend = self.backend
+        thumbsTask = Task { [weak self] in
+            let results: [(windowId: UInt32, jpeg: Data?)]
+            if backend.permissions().screenRecording {
+                results = await backend.thumbnails(windowIds: windowIds)
+            } else {
+                results = windowIds.map { ($0, nil) }
+            }
+            guard !Task.isCancelled else { return }
+            for r in results { await self?.send(.thumb(windowId: r.windowId, jpeg: r.jpeg)) }
         }
     }
 
@@ -415,6 +439,7 @@ actor Session {
         stopViewing()
         viewingWindowId = nil
         pingTask?.cancel()
+        thumbsTask?.cancel()
         // Replacing or ending the session also closes its peer connection (D22).
         closePeer()
         await input.shutdown()

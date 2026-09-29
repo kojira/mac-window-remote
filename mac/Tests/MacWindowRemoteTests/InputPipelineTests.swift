@@ -18,6 +18,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     }
     func focus(windowId: UInt32) async {}
     func releaseButton() async {}
+    func thumbnails(windowIds: [UInt32]) async -> [(windowId: UInt32, jpeg: Data?)] { [] }
     func viewingChanged(_ window: WindowItem?) {}
     func makePeer() -> RTCPeer? { nil }
 }
