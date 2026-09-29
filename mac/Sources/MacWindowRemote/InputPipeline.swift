@@ -249,9 +249,10 @@ extension DiscreteInput {
 }
 
 extension InputAction.Kind {
-    /// ⌘Tab or ⌘⇧Tab: the app switcher (D37, D38).
-    static func isAppSwitch(_ name: String, _ mods: [KeyModifier]) -> Bool {
-        name == "Tab" && mods.contains(.cmd)
+    /// ⌘Tab / ⌘⇧Tab (app switcher) or ⌘F1 / ⌘` with or without ⇧ (next window of the
+    /// front app): the view follows the window that comes forward (D37, D38).
+    static func isWindowSwitch(_ name: String, _ mods: [KeyModifier]) -> Bool {
+        ["Tab", "F1", "`"].contains(name) && mods.contains(.cmd)
     }
 
     /// Log label; never includes typed text.

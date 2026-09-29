@@ -143,7 +143,7 @@ function openWindow(w) {
   refreshSlots();
 }
 
-/// The Mac switched the view to the app that ⌘Tab brought forward (D38). Its `view.state`
+/// The Mac switched the view to the window that ⌘Tab or ⌘F1 brought forward (D38). Its `view.state`
 /// for the new id follows, so this only makes that window the viewed one.
 function onViewSwitched(msg) {
   const w = decodeViewSwitched(msg);

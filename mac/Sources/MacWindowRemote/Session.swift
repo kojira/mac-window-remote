@@ -25,9 +25,9 @@ protocol SessionBackend: Sendable {
     func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome
     /// Puts the window back to its frame before the first fit (D35).
     func restoreWindow(windowId: UInt32) async -> WindowFitOutcome
-    /// After ⌘Tab (D38): waits up to about a second for an app other than the viewed window's
-    /// to come to the front and returns that app's frontmost pickable window, or nil.
-    func windowAfterAppSwitch(from windowId: UInt32) async -> WindowItem?
+    /// After ⌘Tab or ⌘F1 (D38): waits up to about a second for the front app's frontmost
+    /// pickable window to be another window than `windowId` and returns it, or nil.
+    func windowAfterSwitch(from windowId: UInt32) async -> WindowItem?
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
     /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
@@ -268,13 +268,13 @@ actor Session {
         case .text(let text):
             await input.submit(.text(text))
         case .key(let name, let mods):
-            if InputAction.Kind.isAppSwitch(name, mods), let windowId = viewingWindowId {
-                // The viewer follows the app that ⌘Tab brings forward (D38).
+            if InputAction.Kind.isWindowSwitch(name, mods), let windowId = viewingWindowId {
+                // The viewer follows the window that ⌘Tab or ⌘F1 brings forward (D38).
                 await input.submit(.key(name, mods: mods)) { [weak self] code in
                     if let code {
                         await self?.reportInputError(code)
                     } else {
-                        Task { await self?.followAppSwitch(from: windowId) }
+                        Task { await self?.followWindowSwitch(from: windowId) }
                     }
                 }
             } else {
@@ -287,15 +287,15 @@ actor Session {
         }
     }
 
-    // MARK: Follow ⌘Tab (D38)
+    // MARK: Follow ⌘Tab and ⌘F1 (D38)
 
-    /// Switches the view to the front app's window, the same way as `view.start` (no
+    /// Switches the view to the window that came forward, the same way as `view.start` (no
     /// renegotiation), and tells the phone first. Nothing happens if the user switched
     /// windows meanwhile or no window came forward.
-    private func followAppSwitch(from windowId: UInt32) async {
-        guard let window = await backend.windowAfterAppSwitch(from: windowId),
+    private func followWindowSwitch(from windowId: UInt32) async {
+        guard let window = await backend.windowAfterSwitch(from: windowId),
               viewingWindowId == windowId, capture != nil, !closed, window.id != windowId else { return }
-        log.info("view follows app switch id=\(window.id, privacy: .public)")
+        log.info("view follows window switch id=\(window.id, privacy: .public)")
         await send(.viewSwitched(windowId: window.id, app: window.app, title: window.title))
         await startViewing(window.id)
     }

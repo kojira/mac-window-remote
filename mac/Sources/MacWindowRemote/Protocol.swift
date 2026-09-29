@@ -319,7 +319,7 @@ enum ServerMessage {
     case windowFit(windowId: UInt32, state: WindowFitState, clamped: Bool)
     /// Success of a binary request (D36); `path` is the saved image.
     case result(id: String, path: String?)
-    /// The view moved to the window of the app that ⌘Tab brought forward (D38).
+    /// The view moved to the window that ⌘Tab or ⌘F1 brought forward (D38).
     case viewSwitched(windowId: UInt32, app: String, title: String)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }

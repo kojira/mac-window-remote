@@ -84,6 +84,14 @@ enum WindowCatalog {
         }?.id
     }
 
+    /// The window a ⌘Tab or ⌘F1 brought forward (D38): the front app's frontmost pickable
+    /// window when it is not the viewed window `viewed`, else nil (not switched yet, or no
+    /// such window). Comparing window ids covers a switch within the same app.
+    static func switchedWindowId(from viewed: UInt32, frontPid: pid_t, order: [OrderEntry], pickable: Set<UInt32>) -> UInt32? {
+        guard let id = frontWindowId(of: frontPid, order: order, pickable: pickable), id != viewed else { return nil }
+        return id
+    }
+
     static func windowName(_ windowId: UInt32) -> String? {
         guard let info = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowId)) as? [[String: Any]]
         else { return nil }

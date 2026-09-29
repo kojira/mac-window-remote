@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import MacWindowRemote
 
-/// D38: after ⌘Tab the view follows the front app's frontmost pickable window.
+/// D38: after ⌘Tab or ⌘F1 the view follows the front app's frontmost pickable window.
 @Suite struct AppSwitchTests {
     typealias E = WindowCatalog.OrderEntry
     static func e(_ id: UInt32, pid: pid_t, layer: Int = 0, w: CGFloat = 800, h: CGFloat = 600) -> E {
@@ -28,12 +28,34 @@ import Testing
         #expect(WindowCatalog.frontWindowId(of: 20, order: order, pickable: [2, 9]) == nil)
     }
 
-    @Test func onlyCmdTabIsAnAppSwitch() {
-        #expect(InputAction.Kind.isAppSwitch("Tab", [.cmd]))
-        #expect(InputAction.Kind.isAppSwitch("Tab", [.cmd, .shift]))
-        #expect(!InputAction.Kind.isAppSwitch("Tab", []))
-        #expect(!InputAction.Kind.isAppSwitch("Tab", [.ctrl]))
-        #expect(!InputAction.Kind.isAppSwitch("F1", [.cmd]))
+    @Test func switchedWindowWithinTheSameApp() {
+        // ⌘F1: the front app stays (pid 20); its window 6 came in front of the viewed 5.
+        let before = [Self.e(5, pid: 20), Self.e(6, pid: 20), Self.e(2, pid: 10)]
+        let after = [Self.e(6, pid: 20), Self.e(5, pid: 20), Self.e(2, pid: 10)]
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 20, order: before, pickable: [2, 5, 6]) == nil)
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 20, order: after, pickable: [2, 5, 6]) == 6)
+    }
+
+    @Test func switchedWindowOfAnotherApp() {
+        // ⌘Tab: app 10 is front but the window order has not caught up yet, then it has.
+        let lagging = [Self.e(5, pid: 20), Self.e(2, pid: 10)]
+        let after = [Self.e(2, pid: 10), Self.e(5, pid: 20)]
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 10, order: lagging, pickable: [2, 5]) == 2)
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 10, order: after, pickable: [2, 5]) == 2)
+        // Not switched yet (the viewed app is still front), or the front app has no window.
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 20, order: lagging, pickable: [2, 5]) == nil)
+        #expect(WindowCatalog.switchedWindowId(from: 5, frontPid: 30, order: after, pickable: [2, 5]) == nil)
+    }
+
+    @Test func windowSwitchKeys() {
+        for key in ["Tab", "F1", "`"] {
+            #expect(InputAction.Kind.isWindowSwitch(key, [.cmd]))
+            #expect(InputAction.Kind.isWindowSwitch(key, [.cmd, .shift]))
+            #expect(!InputAction.Kind.isWindowSwitch(key, []))
+            #expect(!InputAction.Kind.isWindowSwitch(key, [.ctrl]))
+        }
+        #expect(!InputAction.Kind.isWindowSwitch("F2", [.cmd]))
+        #expect(!InputAction.Kind.isWindowSwitch("c", [.cmd]))
     }
 
     @Test func encodesViewSwitched() throws {
