@@ -88,6 +88,8 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .key.active.pressed { background: #409cff; }
 .key.locked { background: #0a84ff; box-shadow: inset 0 0 0 3px #fff; }
 .key.wide { grid-column: span 3; font-size: 18px; }
+/* D36: the image picker is opened by 🖼; it stays rendered (not display: none) so iOS opens it. */
+#image-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
 /* D36: the clipboard fallback sheet (D5), near the top so the iOS keyboard does not cover it. */
 #paste-sheet { position: absolute; inset: 0; z-index: 6; background: rgba(0, 0, 0, 0.5); }
 #paste-sheet .sheet { position: absolute; left: calc(env(safe-area-inset-left) + 12px); right: calc(env(safe-area-inset-right) + 12px);
