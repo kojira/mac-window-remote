@@ -6,7 +6,7 @@ trackpad-style input), which is implemented and awaits acceptance on a real iPho
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
 §16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.
-§19 (D39) plays the Mac's audio on the iPhone.** Sections marked *Superseded by §11* describe
+§19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -1923,3 +1923,68 @@ On a real iPhone against the real Mac (build signed with the development identit
     selection by pid, bundle ID and prefix, Safari's WebKit.GPU, never our own process; when
     the tap runs (mode, connection, viewed window); `audio` decoding and channel,
     `audio.state` encoding; the phone's stored mode, cycle, labels, and reply handling.
+
+## 20. App launcher with the Dock's apps (user decision)
+
+### D40. An Apps tab on the window list launches or activates an app and views its window
+- **Why (user request):** opening an app that has no window yet (or is not running) needed the
+  Mac itself; the window list only shows windows that already exist.
+- **Phone.** The window list screen (‹) gets a segmented switch at the top: **Windows | Apps**.
+  Windows is the existing list, unchanged. Apps is a grid of app icons with the name under
+  each (4 columns on an iPhone in portrait, more when wider; large tap targets): the Dock's
+  persistent apps in Dock order, then the running regular apps (`activationPolicy ==
+  .regular`) that are not in the Dock, in launch order. A running app has a small dot under
+  its name, like the Dock. The chosen tab is kept in `sessionStorage` (`mwr.listTab`).
+  - Tapping an icon sends `app.open` and shows "Opening <name>…" over the grid (further taps
+    replace the pending one). When the Mac answers `view.switched`, the viewer opens on that
+    window exactly as after a slot or list pick (D33, D38). When the Mac answers the error
+    `app_no_window` (no window within 10 s, e.g. an app that starts without windows, or whose
+    windows are all minimized or on another Space), the phone shows the toast "<name> has no
+    window" and stays on the grid. The phone also gives up after 12 s on its own.
+  - Refresh on the Apps tab re-requests the app list; switching to the tab requests it too.
+- **Mac: the app list** (`apps.list` → `apps`). Dock apps come from
+  `CFPreferencesCopyAppValue("persistent-apps", "com.apple.dock")`: each tile's
+  `tile-data.file-data._CFURLString` (a `file://` URL) is the app bundle. Tiles without that URL,
+  non-file URLs, and bundles that do not exist are skipped; duplicates keep the first. Running
+  regular apps with a bundle URL follow, minus those already listed and minus this app. Each
+  item is `{"id":"…","name":"…","running":true|false}`; `name` is the bundle's display name
+  without `.app`.
+  - `id` is an opaque, stable token derived from the bundle path (64-bit FNV-1a, hex). The Mac
+    keeps the id → bundle URL map of the list it produced last. **Only ids in that map are
+    launched or have icons served**; the phone never sends a path. An unknown id gets
+    `app_not_found`.
+- **Mac: icons.** `GET /apps/icon/<id>.png` (behind the same Tailscale identity middleware as
+  every other route, D32) returns the bundle icon (`NSWorkspace.icon(forFile:)`) drawn at
+  128 × 128 px as PNG, cached in memory, with `Cache-Control: private, max-age=86400`. Unknown
+  id: 404.
+- **Mac: open** (`{"t":"app.open","id":"…"}` on the WebSocket). `NSWorkspace.openApplication(at:
+  configuration:)` with `activates = true` launches the app, or activates a running one (which,
+  like a Dock click, asks it to reopen a window). Then every 250 ms for at most 10 s the Mac
+  looks for that pid's frontmost pickable window (the D38 selection:
+  `WindowCatalog.frontWindowId` over the on-screen order and `shareableWindows`). Found: the Mac
+  sends `view.switched` and starts viewing it as `view.start` does (the D38 switch). Not found:
+  `{"t":"error","id":"<app id>","code":"app_no_window",…}`; launch failure: `app_launch_failed`.
+  A newer `app.open` cancels the older wait; a `view.start`/`view.stop` meanwhile, or the
+  session closing, makes the result be dropped.
+- **Non-goals:** Finder/Trash/folder/recent-app Dock tiles; quitting or hiding apps; choosing
+  among an app's windows (the list does that); watching the Dock for changes (the list is
+  read when requested).
+- **Source changes:** `AppCatalog.swift` (new: Dock parsing, merge, ids, allowlist, icons),
+  `Protocol.swift` (`apps.list`, `app.open`, `apps`, error codes), `Session.swift`,
+  `MacBackend.swift` (`listApps`, `appIcon`, `openApp`), `Server.swift` (icon route);
+  `web/apps.js` (new: `apps` decoding), `web/app.js`, `web/index.html`, `web/style.css`.
+
+### D40 acceptance criteria
+On a real iPhone against the real Mac:
+1. ‹ shows Windows | Apps; Windows is the old list. Apps shows the Dock's apps in Dock order
+   with their icons and names, then other running apps; running apps have a dot.
+2. Tapping a running app with a window: "Opening <name>…", then within about a second the
+   viewer shows that app's front window, and input goes to it.
+3. Tapping an app that is not running launches it on the Mac and the viewer shows its first
+   window once it appears.
+4. An app that opens no window (or whose windows are all minimized) gives "<name> has no
+   window" after about 10 s and the grid stays.
+5. *Unit:* Dock plist parsing into the ordered, de-duplicated list (missing bundles and
+   malformed tiles skipped), running apps appended without duplicates; an unknown or stale id
+   is rejected (no URL); `apps.list`/`app.open` decoding and `apps` encoding; the phone's
+   `apps` decoding.
