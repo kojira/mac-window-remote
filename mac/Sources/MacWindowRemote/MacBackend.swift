@@ -9,6 +9,8 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     private var viewing: WindowItem?
     private let displayAssertion = DisplayAssertion()
     private let resizer = WindowResizer()
+    /// The latest capture, whose composite the input maps to (D44).
+    private weak var capture: CaptureSession?
 
     init(rtc: RTCHost, onViewing: @escaping @Sendable (WindowItem?) -> Void) {
         self.rtc = rtc
@@ -50,6 +52,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             log.error("capture start failed id=\(windowId, privacy: .public): \(String(describing: error), privacy: .public)")
             return .unavailable(reason: "stream_stopped")
         }
+        lock.withLock { self.capture = capture }
         log.info("capture started id=\(windowId, privacy: .public)")
         return .started(capture, WindowCatalog.item(for: window))
     }
@@ -200,20 +203,38 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             log.info("input rejected kind=\(kind, privacy: .public) reason=permission_accessibility")
             return .permissionAccessibility
         }
-        guard let bounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
+        guard let windowBounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
             log.info("input rejected kind=\(kind, privacy: .public) reason=window_not_found")
             return .windowNotFound
         }
+        // With child windows the video is the composite area, so the cursor maps to it (D44).
+        let composite = lock.withLock { capture?.windowId == action.windowId ? capture?.composite : nil }
+        let bounds = composite?.rect ?? windowBounds
         let p = action.cursor.globalPoint(in: bounds)
         if case .move = action.kind {
             // A plain cursor move never needs focus (D25).
             await InputInjector.move(to: p)
             return nil
         }
-        // Everything else needs the window in front: raise once if it is not (D25).
+        // Everything else needs the window in front: raise once if it is not (D25). With child
+        // windows, the child under a click, or a child already in front, is kept in front (D44).
         var focus = WindowFocuser.Outcome.alreadyFront
         if case .dragEnd = action.kind {} else {
-            focus = WindowFocuser.focus(windowId: action.windowId, pid: pid, bounds: bounds)
+            var target = action.windowId
+            if let composite {
+                let entries = ChildWindows.onScreenEntries()
+                switch action.kind {
+                case .click, .rightClick, .dragStart:
+                    target = ChildWindows.focusTarget(at: p, viewedId: action.windowId,
+                                                      childIds: composite.childIds, entries: entries)
+                default:
+                    target = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
+                                                    entries: entries)
+                }
+            }
+            if let targetBounds = target == action.windowId ? windowBounds : WindowCatalog.currentBounds(target) {
+                focus = WindowFocuser.focus(windowId: target, pid: pid, bounds: targetBounds)
+            }
         }
         switch action.kind {
         case .move:
