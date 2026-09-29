@@ -1657,6 +1657,7 @@ On a real iPhone against the real Mac:
   - The phone keeps showing the viewed window (the stream follows the window, not the front
     app), and the next input raises the viewed window again (D25). So ⌘Tab's effect is seen
     on the Mac screen, not on the phone, unless the viewed window is the one brought forward.
+    *Amended by §18 D38:* the viewer now follows the app that ⌘Tab brings forward.
 - **Source changes:** `web/modifiers.js` (`mergeMods`), `web/keypanel.js` (two keys and the
   merge), `web/style.css` (four keys per row).
 
@@ -1671,3 +1672,62 @@ On a real iPhone against the real Mac:
 5. Holding ⌘Tab sends it once (no repeat); the key highlights while pressed.
 6. 📋 Paste and 🖼 Image still work as in D36.
 7. *Unit:* merging a combo key's mods with armed and locked modifiers.
+
+## 18. The viewer follows ⌘Tab (user decision; amends D37)
+
+### D38. After ⌘Tab or ⌘⇧Tab the view switches to the app that came to the front
+- **Why (user request, after using D37 on the iPhone):** ⌘Tab brought another app forward on
+  the Mac, but the phone kept showing the old window, and the next tap raised the old window
+  again (D25), undoing the switch.
+- **Trigger.** A `key` message whose key is `Tab` with `cmd` in `mods` (so ⌘Tab and ⌘⇧Tab,
+  from the combo key or from ⌘ then tab), while a window is viewed. It is posted through the
+  ordered input pipeline as before (D25, D34). Nothing else changes for other keys.
+  - Before posting it, the viewed window is brought to the front once (D25) and, if a raise
+    happened, the combo waits the same 80 ms as a click, so ⌘Tab switches away from the
+    viewed window's app and not from whatever was in front before.
+- **Mac: find the new window** (after the combo was posted without error):
+  1. Poll `NSWorkspace.shared.frontmostApplication` every 25 ms for at most 1 s until its pid
+     differs from the viewed window's app. Timeout: nothing happens (the view stays).
+  2. Take the on-screen window order (`CGWindowListCopyWindowInfo`, on-screen only, no
+     desktop elements, front to back) and pick the first entry that is owned by that pid,
+     is layer 0, is at least 50 × 50 pt, and is in the pickable window list
+     (`WindowCatalog.shareableWindows`, the same filter as the window list, which also
+     excludes the Mac app's own windows). None (e.g. Finder with only the desktop, an app
+     whose windows are all minimized or on another Space): nothing happens.
+  3. If the phone switched windows meanwhile (a slot or the list), or viewing stopped, or the
+     session closed, nothing happens.
+- **Mac: switch.** Send `{"t":"view.switched","windowId":…,"app":"…","title":"…"}` on the
+  WebSocket, then switch the capture exactly as `view.start` does (D18, D33): the old capture
+  stops, the new one starts on the same capturer and track (no renegotiation), and
+  `view.state` `starting`/`streaming` follow for the new id. The input target becomes the new
+  window, so the next input does not raise the old window (D25). The menu bar shows the new
+  window.
+- **Phone: on `view.switched`** (ignored unless the viewer is shown and a well-formed
+  `windowId` differs from the viewed one): the viewed window (the `mwr.window` session
+  storage entry, D33) becomes `{id, app, title}` from the message; the video is cleared and
+  waits for the new window's first frame (as a slot switch does: fit on the new size, D21);
+  the slot highlight and 📱 state follow the new window (D33, D35); the window list is
+  refreshed, which re-resolves the slots and requests thumbnails. No toast when the view
+  stays; no other UI changes.
+- **Non-goals:** following app switches made on the Mac itself (keyboard or mouse there);
+  following ⌘` (window cycling) or other shortcuts that change the front window.
+- **Source changes:** `Protocol.swift` (`view.switched`), `Session.swift` (follow after the
+  combo), `MacBackend.swift` (wait for the front app, 80 ms after a raise),
+  `WindowCatalog.swift` (on-screen order, front window selection), `InputPipeline.swift`
+  (`isAppSwitch`); `web/app.js`, `web/slots.js` (`decodeViewSwitched`).
+
+### D38 acceptance criteria
+On a real iPhone against the real Mac:
+1. Viewing window A of app X, tap ⌘Tab: the Mac brings the most recently used other app Y
+   forward, and within about a second the phone shows Y's frontmost window without
+   "Connecting video…"; the view fits the new window.
+2. Tap on the video after that: the tap goes to Y's window; X's window is not raised.
+3. ⇧ then ⌘Tab (⌘⇧Tab) behaves the same with the app the reverse switch brings forward.
+4. If Y's window is in a slot, that slot becomes highlighted; 📱 shows Y's window's state;
+   thumbnails refresh.
+5. If Y has no pickable window (e.g. Finder with only the desktop), the phone keeps showing
+   A and no error appears.
+6. Other keys, ⌘F1, 📋 Paste, 🖼 Image, and slot switching are unchanged.
+7. *Unit:* front window selection from a sample on-screen order (front to back, layer 0,
+   owner pid, minimum size, pickable ids; none); `isAppSwitch`; `view.switched` encoding
+   and the phone's decoding.
