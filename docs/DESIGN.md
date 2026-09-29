@@ -5,7 +5,8 @@ trackpad-style input), which is implemented and awaits acceptance on a real iPho
 §12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
-§16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.** Sections marked *Superseded by §11* describe
+§16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.
+§19 (D39) plays the Mac's audio on the iPhone.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -53,7 +54,8 @@ The user experience, end to end:
 
 ### Non-goals (explicitly out of scope)
 
-- Audio streaming.
+- ~~Audio streaming.~~ §19 (D39) adds Mac → iPhone audio. Microphone audio stays out of
+  scope.
 - Full-desktop or multi-monitor desktop view. Only one window is streamed. The window
   may be on any display.
 - Operating a locked Mac, unlocking it, or waking a sleeping Mac.
@@ -1756,3 +1758,165 @@ On a real iPhone against the real Mac:
    selection from a sample on-screen order (front to back, layer 0, minimum size, pickable
    ids, front app's pid; same-app and other-app switches; not yet switched; none);
    `isWindowSwitch`; `view.switched` encoding and the phone's decoding.
+
+## 19. Mac audio on the iPhone (user decision; amends §1 non-goals, D21, D22, D33)
+
+### D39. 🔊 plays the Mac's sound only on the iPhone: Off → App → All
+- **Why (user request):** hear the viewed app (a video, a call, a notification sound) on the
+  iPhone without it also playing out of the Mac's speakers.
+- **Modes.** A 🔊 button in the bottom bar cycles **Off → App → All → Off**:
+  - **Off** (🔇, default): no audio; the Mac sounds as usual.
+  - **App** (🔊 App): the app that owns the viewed window, with its helper processes.
+  - **All** (🔊 All): every process on the Mac except Mac Window Remote itself.
+  While a phone is connected and the mode is not Off, **the tapped audio is muted on the Mac**
+  and plays only on the iPhone. Off, a dropped or failed connection, the session being
+  replaced (4002), the page closing or going to the background (D15), or a tap failure all
+  tear the tap down, and the Mac is audible again at once.
+- **Mac: capture (Core Audio process tap, macOS 14.2+).** `SystemAudioTap` owns one
+  `CATapDescription` tap, a private aggregate device that contains it, and an IOProc:
+  - All: `CATapDescription(stereoGlobalTapButExcludeProcesses: [own process object])`
+    (empty if our process has no audio object; we never play audio).
+  - App: `CATapDescription(stereoMixdownOfProcesses:)` of the viewed app's process objects:
+    every Core Audio process object whose pid is the window's pid, or whose bundle ID equals
+    the app's bundle ID or starts with `bundleID + "."` (Chrome's `…helper`,
+    `…helper.Renderer`, Electron helpers). Never our own process. For Safari
+    (`com.apple.Safari`, `com.apple.SafariTechnologyPreview`) also `com.apple.WebKit.GPU`
+    (below). An app that has not used audio yet has no process object: the tap is not
+    created until one appears.
+  - `isPrivate = true`, `muteBehavior = .mutedWhenTapped`: the tapped processes are silent
+    on the Mac only while our IOProc reads the tap. Stopping the IOProc, destroying the tap,
+    or our process exiting (the tap and aggregate are private) makes the Mac audible again.
+  - Aggregate: private, not stacked, the tap with drift compensation, clocked by the default
+    output device as a sub-device — unless that device also has input streams (a headset),
+    in which case the aggregate holds the tap alone, so no microphone is ever opened.
+  - Teardown order: `AudioDeviceStop`, `AudioDeviceDestroyIOProcID`,
+    `AudioHardwareDestroyAggregateDevice`, `AudioHardwareDestroyProcessTap`.
+  - **App mode follows the view.** On every started capture (the list, a slot, ⌘Tab/⌘F1/⌘`
+    following, D33, D38) the session sets the target to the new window's pid. Another
+    window of the same app changes nothing. Another app, or new or exited helper processes
+    (a listener on `kAudioHardwarePropertyProcessObjectList`), rewrite the process list of
+    the existing tap through `kAudioTapPropertyDescription`, without a gap; if that fails,
+    the tap is rebuilt. With no viewed window (the list), App mode has no tap: nothing is
+    muted.
+  - **Output device change** (a listener on `kAudioHardwarePropertyDefaultOutputDevice`,
+    e.g. headphones plugged in): the tap and aggregate are rebuilt.
+  - All Core Audio calls run on one serial queue; the tap is created on first use, so the
+    app touches Core Audio only after the phone asks for audio.
+- **Mac: conversion.** The IOProc reads the tap's Float32 buffers (the tap's streams are the
+  last buffers of the aggregate's input list), averages the channels to **mono**, converts
+  the aggregate's rate to **48 kHz** (`AVAudioConverter`, only if it differs), converts to
+  Int16 (clipped), and cuts exact **480-frame (10 ms) chunks** (`AudioChunker`).
+  Stereo is out of scope: the WebRTC capture pipeline in this build downmixes to mono anyway
+  (measured in the research spike).
+- **Mac: WebRTC.** The factory is created with `initWithEncoderFactory:decoderFactory:audioDevice:`
+  and our `TapAudioDevice` (an `RTCAudioDevice`: 48 kHz, 1 channel, 10 ms). It never opens a
+  microphone or speaker: recording is fed by the tap through `deliverRecordedData`, and
+  playout does nothing, so the Mac never plays WebRTC audio (and never asks for microphone
+  access). Chunks are dropped unless WebRTC is recording. Before a rebuilt tap delivers from
+  its new IO thread, `notifyAudioInputInterrupted` is called.
+  - `RTCAudioDevice.h` is not in the macOS slice of stasel/WebRTC 153.0.0, although the
+    binary implements it. The target `WebRTCAudioDevice` vendors the header **verbatim**
+    from the iOS slice of the same version, with its BSD license
+    (`mac/Sources/WebRTCAudioDevice/LICENSE`). **Pinned:** re-copy it when WebRTC is bumped.
+  - One audio source and track (`trackId "audio"`) with echo cancellation, gain control,
+    noise suppression, and the high-pass filter off. `RTCPeer.answer` sets the phone's audio
+    transceiver to `sendonly` with that track (a page without one still works). Opus, as
+    negotiated by default.
+- **When the tap runs** (`AudioTarget.desired`): mode ≠ Off, the peer connection is
+  `connected`, and in App mode a window is viewed (capture started). The session applies it
+  on every change of the mode, the peer state, or the viewed pid; `disconnected` stops the
+  tap at once (the Mac is audible during a reconnect), `connected` again restarts it.
+  Session teardown closes the peer, which stops it. The mode is not stored on the Mac.
+- **Phone.**
+  - `rtc.js` adds `addTransceiver('audio', {direction: 'recvonly'})` after the video one.
+  - A separate `<audio id="audio" playsinline>` plays it; `<video>` stays `muted` (its
+    autoplay must not depend on a gesture). The element has one `MediaStream` for the page's
+    life; each new connection swaps the track in it instead of replacing `srcObject`, so the
+    element stays unlocked after the first tap.
+  - 🔊 is a tap handler: it cycles the mode, stores it (`localStorage['mwr.audio']` =
+    `off|app|all`), sends `{"t":"audio","mode":…}` on `control`, and calls `play()` (or
+    `pause()` for Off) inside the tap, which unlocks audio on iOS. `navigator.audioSession.type
+    = 'playback'` when available.
+  - After a reload with a stored mode ≠ Off (or if iOS refuses `play()` after a reconnect),
+    the button shows the mode with an **orange dot** until iOS allows playback; the next touch
+    anywhere (e.g. the first trackpad touch) calls `play()`. A tap on 🔊 while the dot is shown only enables sound, it does not change the
+    mode.
+  - Every `onReady` (a new peer connection) re-sends the mode. The Mac echoes each request
+    with `audio.state`; the phone takes the echoed mode only when no newer request is
+    unanswered (fast taps do not flicker).
+  - Placement: after 📱, before ⌨︎; 40 pt wide, icon over a small "Off/App/All" label; blue
+    while on. Hidden while typing, like the slots, Fit, and 📱.
+- **Protocol** (on `control`, like other input):
+  ```jsonc
+  // phone → Mac
+  {"t":"audio","mode":"off"|"app"|"all"}            // other or missing mode: bad_request
+  // Mac → phone
+  {"t":"audio.state","mode":"off"|"app"|"all"}      // echo; "off" after audio_unavailable
+  {"t":"error","code":"audio_unavailable","message":"Mac audio is not available on this Mac"}
+  {"t":"error","code":"permission_audio_capture","message":"No audio: allow audio capture in System Settings › Privacy & Security"}
+  ```
+  The phone shows both errors as a toast.
+- **Permission (TCC).** `NSAudioCaptureUsageDescription` is in `Info.plist`. macOS asks the
+  first time the tap is read ("System Audio Recording"); it is separate from Screen
+  Recording and is listed in System Settings › Privacy & Security › Screen & System Audio
+  Recording. There is no public preflight API. When denied, the tap still works but yields
+  silence. **Silence detection:** once a second the Mac checks whether any tapped process
+  reports `kAudioProcessPropertyIsRunningOutput`; if the tap delivered only exact zeros
+  since it started while a tapped process was playing, for 4 checks in a row, it sends
+  `permission_audio_capture` once per tap. Real audio seen once disables the check for that
+  tap. An ad-hoc re-signed build loses the grant like Screen Recording (D17).
+- **Failures.** macOS before 14.2, or a tap/aggregate/IOProc that cannot be created:
+  everything built is torn down, the mode becomes Off, and the phone gets
+  `audio_unavailable` and `audio.state off`.
+- **Known limitations.**
+  - **Safari and WebKit apps:** web audio plays in the shared `com.apple.WebKit.GPU`
+    process, which has no Safari bundle-ID prefix. App mode on Safari therefore also taps
+    (and mutes) WebKit.GPU, which carries the audio of other WebKit-based apps (e.g. Mail,
+    other WKWebView apps) too. Other WKWebView apps are not given WebKit.GPU and may be
+    silent in App mode; All mode always works.
+  - Mono only; stereo is not sent.
+  - With an output device that also has inputs (a Bluetooth or USB headset), the aggregate
+    holds only the tap, so the headset's microphone is not opened. That tap-only aggregate is
+    to be confirmed on the device (acceptance 8); if it yields no callbacks, the design comes
+    back here.
+  - Audio is not lip-synced to the video explicitly; both paths are low-latency.
+  - Sounds the Mac makes itself (system alerts from other processes) follow the mode like
+    any process: All mode taps them, App mode does not.
+- **Non-goals:** microphone or phone → Mac audio; audio while the page is in the background
+  (the connection closes, D15); per-app volume.
+- **Source changes:** `Package.swift` (target `WebRTCAudioDevice`), `WebRTCAudioDevice/`
+  (vendored header, license), `TapAudioDevice.swift`, `SystemAudioTap.swift`,
+  `AudioChunker.swift`, `AudioProcessSelection.swift` (new), `RTCHost.swift` (factory with
+  the device, audio track, audio transceiver), `Protocol.swift` (`audio`, `audio.state`,
+  error codes), `Session.swift` (mode, target, events), `MacBackend.swift` (`setAudio`),
+  `Resources/Info.plist`; `web/audio.js` (new), `web/rtc.js`, `web/app.js`,
+  `web/index.html`, `web/style.css`.
+
+### D39 acceptance criteria
+On a real iPhone against the real Mac (build signed with the development identity):
+1. The bottom bar shows 🔇 Off after 📱. Video, input, slots, and the key panel work as before
+   with audio Off, and the Mac never asks for microphone access.
+2. Viewing a window of an app that plays sound (e.g. a YouTube tab in Chrome), tap 🔊 once
+   (App): the first time, macOS asks to allow Mac Window Remote to record system audio;
+   after Allow, the sound plays on the iPhone within about a second and **not** from the
+   Mac's speakers. Other apps still sound on the Mac.
+3. Tap again (All): every Mac sound (another app, a notification) plays on the iPhone and
+   none on the Mac. Tap again (Off): the Mac's speakers play again at once; the phone is
+   silent.
+4. In App mode, switching the view to another app (slot, list, ⌘Tab) moves the audio to the
+   new app: the old app is audible on the Mac again, the new one only on the phone. ⌘F1 to
+   another window of the same app changes nothing audible.
+5. With audio on, going to the window list (App mode: the app is audible on the Mac again),
+   locking the phone or switching to another iPhone app, losing the network, or opening the
+   page on another device (4002) returns the Mac's sound; coming back resumes the mode
+   without another tap (after a reload: the first touch anywhere).
+6. Reloading the page keeps the mode (🔊 App/All with an orange dot until the first touch).
+7. With System Audio Recording denied, the phone shows "No audio: allow audio capture in
+   System Settings › Privacy & Security" within about 5 s of sound playing.
+8. Plugging in or switching the Mac's output device while listening keeps the sound on the
+   phone (after a short gap) and the Mac silent.
+9. Quitting or force-quitting the Mac app while listening makes the Mac audible again.
+10. *Unit:* downmix, 48 kHz resampling, Int16 clipping, and 480-frame chunking; process
+    selection by pid, bundle ID and prefix, Safari's WebKit.GPU, never our own process; when
+    the tap runs (mode, connection, viewed window); `audio` decoding and channel,
+    `audio.state` encoding; the phone's stored mode, cycle, labels, and reply handling.

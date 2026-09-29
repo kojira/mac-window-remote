@@ -1,22 +1,34 @@
 import Foundation
 import WebRTC
 
-/// The app-wide WebRTC state (DESIGN.md D20, D21): one factory, one screen-cast video source fed
-/// by `WindowVideoCapturer`, and one video track that every peer connection sends.
+/// The app-wide WebRTC state (DESIGN.md D20, D21, D39): one factory, one screen-cast video source
+/// fed by `WindowVideoCapturer`, one video track, and one audio track fed by the Mac audio tap
+/// through `TapAudioDevice`, which every peer connection sends.
 final class RTCHost: @unchecked Sendable {
     let factory: RTCPeerConnectionFactory
     let capturer: WindowVideoCapturer
     let track: RTCVideoTrack
+    let audioDevice: TapAudioDevice
+    let audioTrack: RTCAudioTrack
 
     /// Call once at launch, before the first `RTCHost` (D20).
     static func initialize() { RTCInitializeSSL() }
 
     init() {
+        // D39: our own audio device, so WebRTC never opens the microphone or plays on the Mac.
+        audioDevice = TapAudioDevice()
         factory = RTCPeerConnectionFactory(encoderFactory: ScreenH264EncoderFactory(),
-                                           decoderFactory: RTCDefaultVideoDecoderFactory())
+                                           decoderFactory: RTCDefaultVideoDecoderFactory(),
+                                           audioDevice: audioDevice)
         let source = factory.videoSource(forScreenCast: true)
         capturer = WindowVideoCapturer(delegate: source)
         track = factory.videoTrack(with: source, trackId: "window")
+        // Music and speech as they are: no echo cancellation, gain control, or noise filters.
+        let noProcessing = ["googEchoCancellation": "false", "googAutoGainControl": "false",
+                            "googNoiseSuppression": "false", "googHighpassFilter": "false"]
+        let audioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: noProcessing,
+                                                                         optionalConstraints: nil))
+        audioTrack = factory.audioTrack(with: audioSource, trackId: "audio")
     }
 
     /// Creates the answering peer connection for a phone's offer (D22).
@@ -121,6 +133,13 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
             // Swift imports `setCodecPreferences:error:` and the deprecated non-throwing variant
             // under one name and picks the latter; the answer's codec list shows the effect.
             transceiver.setCodecPreferences(host.h264Capabilities)
+        }
+        // D39: the phone's recvonly audio transceiver gets the tap's track (older pages have none).
+        if let audio = connection.transceivers.first(where: { $0.mediaType == .audio }), audio.sender.track == nil {
+            var error: NSError?
+            audio.setDirection(.sendOnly, error: &error)
+            if let error { throw error }
+            audio.sender.track = host.audioTrack
         }
         let answer = try await createAnswer()
         try await setLocal(answer)

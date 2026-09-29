@@ -6,6 +6,7 @@ import { SlotBar } from './slotbar.js';
 import { decodeViewSwitched } from './slots.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
+import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
   IMAGE_MAX_BYTES, clipboardMessage, imageChunkMessages, shortPath,
 } from './upload.js';
@@ -204,6 +205,68 @@ function viewingWindowId() {
   return viewingWindow()?.id ?? null;
 }
 
+// ---------- Mac audio on the iPhone (D39) ----------
+
+const audioMode = new AudioMode(localStorage.getItem(AUDIO_KEY));
+const audioOutput = new AudioOutput($('audio'));
+audioOutput.onChange = renderAudio;
+
+function renderAudio() {
+  const b = $('audio-mode');
+  const mode = audioMode.mode;
+  const label = audioButtonLabel(mode);
+  b.querySelector('.icon').textContent = label.icon;
+  b.querySelector('.mode').textContent = label.text;
+  b.classList.toggle('on', mode !== 'off');
+  b.classList.toggle('blocked', audioOutput.blocked(mode));
+  b.setAttribute('aria-label', audioAriaLabel(mode) + (audioOutput.blocked(mode) ? ' (tap to enable sound)' : ''));
+}
+
+/// Plays or pauses the <audio> element for the current mode. Inside a tap this also unlocks it.
+function applyAudioOutput() {
+  if (audioMode.mode === 'off') audioOutput.pause(); else audioOutput.play();
+  renderAudio();
+}
+
+function storeAudioMode() {
+  localStorage.setItem(AUDIO_KEY, audioMode.mode);
+}
+
+$('audio-mode').addEventListener('click', () => {
+  // A tap while the sound is blocked only enables it; otherwise it cycles the mode.
+  if (!audioOutput.blocked(audioMode.mode)) {
+    audioMode.cycle();
+    storeAudioMode();
+    if (!link.send({ t: 'audio', mode: audioMode.mode })) audioMode.unsent();
+  }
+  applyAudioOutput();
+});
+
+// While audio is on but iOS has not let it play (after a reload, or a play() refused after a
+// reconnect), the next touch anywhere starts it: touchend is a user gesture.
+function unlockAudioOnTouch() {
+  const unlock = () => {
+    if (audioOutput.blocked(audioMode.mode)) audioOutput.play();
+  };
+  document.addEventListener('touchend', unlock, true);
+  document.addEventListener('click', unlock, true);
+}
+
+/// A new peer connection is ready: its audio track goes to the element, and the Mac gets the
+/// mode again (it does not keep it).
+function onAudioReady(track) {
+  audioOutput.setTrack(track);
+  if (audioMode.mode !== 'off') audioOutput.play();
+  renderAudio();
+}
+
+function onAudioState(msg) {
+  if (audioMode.onState(msg)) {
+    storeAudioMode();
+    applyAudioOutput();
+  }
+}
+
 // ---------- quick-switch slots (D33) ----------
 
 /// A fresh window list re-resolves the slots; its reply requests the thumbnails.
@@ -398,6 +461,7 @@ function onMessage(msg) {
 
 /// The peer connection is connected and `control` is open: resume the viewer or the list.
 function onVideoReady() {
+  if (!link.send({ t: 'audio', mode: audioMode.resend() })) audioMode.unsent();
   if (screen === 'viewer' && viewingWindowId() != null) {
     viewer.clear();
     viewer.setDimmed(false);
@@ -420,6 +484,9 @@ function onControl(msg) {
       break;
     case 'window.fit':
       onWindowFit(msg);
+      break;
+    case 'audio.state':
+      onAudioState(msg);
       break;
     case 'error':
       onError(msg);
@@ -461,6 +528,10 @@ function onError(msg) {
       return;
     case 'rtc_failed':
       link.fail();
+      return;
+    case 'audio_unavailable':
+    case 'permission_audio_capture':
+      toast(msg.message || 'No audio from the Mac');
       return;
     case 'window_not_fitted':
       // The Mac no longer has the original frame (e.g. it restarted): forget ours too.
@@ -658,6 +729,7 @@ const link = new VideoLink({
   onStatus: showVideoStatus,
   onReady: onVideoReady,
   onControl,
+  onAudioTrack: onAudioReady,
 });
 
 /// Input messages go on the data channels (D22).
@@ -704,4 +776,6 @@ const keyPanel = new KeyPanel({
 
 // Earlier versions paired with a stored secret; it is no longer used.
 localStorage.removeItem('mwr.secret');
+renderAudio();
+unlockAudioOnTouch();
 connect();

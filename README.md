@@ -5,6 +5,7 @@ View and operate **one Mac window at a time** from an iPhone.
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
 - The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C, one-tap ⌘F1 and ⌘Tab, and 📋 Paste / 🖼 Image; its text key opens the iPhone keyboard.
+- 🔊 in the bottom bar plays the Mac's sound on the iPhone instead of the Mac's speakers: **App** (the viewed window's app) or **All** (the whole Mac); 🔇 **Off** gives the sound back to the Mac. Needs macOS 14.2 or later.
 
 ## Status
 
@@ -52,6 +53,7 @@ The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, 
 4. In Terminal, run the command that Setup shows, once: `tailscale serve --bg http://127.0.0.1:8765`
 5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens. To use it from the Home Screen, choose Share → **Add to Home Screen**.
 6. Keep the Mac unlocked while you use it remotely.
+7. The first time you turn on 🔊 on the iPhone, macOS asks whether Mac Window Remote may record system audio: click **Allow** (System Settings → Privacy & Security → Screen & System Audio Recording). If the phone says "No audio: allow audio capture…", turn the app on there.
 
 If macOS asks whether **MacWindowRemote** may accept incoming network connections, click **Allow**: the video goes directly between the Mac and the iPhone over UDP on the tailnet (WebRTC), not through `tailscale serve`. After a rebuild, macOS may also ask for Screen Recording and Accessibility again; switch the app's entry off and on in System Settings → Privacy & Security.
 

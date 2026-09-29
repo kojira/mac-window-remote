@@ -95,6 +95,22 @@ import Testing
         #expect(fit["state"] as? String == "fitted" && fit["clamped"] as? Bool == true)
     }
 
+    /// D39: the audio mode on `control`, and its echo.
+    @Test func decodesAudioMode() throws {
+        #expect(try decode(#"{"t":"audio","mode":"off"}"#) == .audio(mode: .off))
+        #expect(try decode(#"{"t":"audio","mode":"app"}"#) == .audio(mode: .app))
+        #expect(try decode(#"{"t":"audio","mode":"all"}"#) == .audio(mode: .all))
+        #expect(throws: ProtocolError.invalidValue("mode")) { try decode(#"{"t":"audio"}"#) }
+        #expect(throws: ProtocolError.invalidValue("mode")) { try decode(#"{"t":"audio","mode":"mac"}"#) }
+        #expect(throws: ProtocolError.malformed) { try decode(#"{"t":"audio","mode":1}"#) }
+        #expect(throws: ProtocolError.wrongChannel("audio")) {
+            try ClientMessage.decode(Data(#"{"t":"audio","mode":"all"}"#.utf8), on: .socket)
+        }
+        let state = try JSONSerialization.jsonObject(
+            with: Data(ServerMessage.audioState(mode: .app).jsonString().utf8)) as! [String: Any]
+        #expect(state["t"] as? String == "audio.state" && state["mode"] as? String == "app")
+    }
+
     /// D33: thumbnail requests carry at most three window ids.
     @Test func decodesThumbnailRequests() throws {
         #expect(try decode(#"{"t":"thumbs.request","windowIds":[1,2,3]}"#) == .thumbsRequest(windowIds: [1, 2, 3]))

@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Mac Window Remote captures the window you pick so you can see it on your iPhone.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Mac Window Remote plays the Mac's sound on your iPhone and mutes it on this Mac while you listen there.</string>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Mac Window Remote clicks and types in the window you pick when you operate it from your iPhone.</string>
 </dict>

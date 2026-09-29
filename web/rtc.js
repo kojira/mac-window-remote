@@ -12,8 +12,10 @@ export class VideoLink {
   /// onStatus(status): 'connecting' | 'reconnecting' | 'connected' | 'failed'.
   /// onReady(): a new peer connection is connected and `control` is open.
   /// onControl(msg): a JSON message from the Mac on `control`.
-  constructor({ video, signal, onStatus, onReady, onControl }) {
+  /// onAudioTrack(track): the Mac audio track of a newly connected peer connection (D39).
+  constructor({ video, signal, onStatus, onReady, onControl, onAudioTrack }) {
     this.video = video;
+    this.onAudioTrack = onAudioTrack;
     this.signal = signal;
     this.onStatus = onStatus;
     this.onReady = onReady;
@@ -33,6 +35,8 @@ export class VideoLink {
     this.remoteSet = false;
     this.pendingIce = [];
     this.transceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+    // D39: Mac audio; played by a separate <audio> element, never by the muted <video>.
+    this.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
     this.motion = pc.createDataChannel('motion', { ordered: false, maxRetransmits: 0 });
     this.control = pc.createDataChannel('control');
     this.control.onmessage = (e) => {
@@ -134,6 +138,7 @@ export class VideoLink {
     // Attached only now, so the last image stays visible while a new connection is set up.
     this.video.srcObject = new MediaStream([this.transceiver.receiver.track]);
     this.video.play().catch(() => { /* muted inline video; iOS allows autoplay */ });
+    this.onAudioTrack(this.audioTransceiver.receiver.track);
     this.onReady();
   }
 

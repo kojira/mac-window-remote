@@ -25,6 +25,11 @@ enum ErrorCode: String, Codable {
     case windowFullscreen = "window_fullscreen"
     /// D35: restore without a saved frame.
     case windowNotFitted = "window_not_fitted"
+    /// D39: Mac audio cannot be tapped (macOS before 14.2, or the tap could not be created).
+    case audioUnavailable = "audio_unavailable"
+    /// D39: the tap yields only silence while a tapped app plays, which is what a missing
+    /// System Audio Recording grant looks like.
+    case permissionAudioCapture = "permission_audio_capture"
     case `internal` = "internal"
 }
 
@@ -54,6 +59,13 @@ enum ClientMessage: Equatable {
     case windowFitPhone(aspect: Double)
     /// Put the viewed window back to its frame before the first fit (D35).
     case windowRestore
+    /// Play Mac audio on the phone: off, the viewed window's app, or the whole Mac (D39).
+    case audio(mode: AudioMode)
+}
+
+/// What Mac audio goes to the phone (D39). Not persisted on the Mac; the phone re-sends it.
+enum AudioMode: String, Codable, Equatable, Sendable {
+    case off, app, all
 }
 
 struct RemoteCandidate: Equatable, Sendable {
@@ -95,6 +107,7 @@ extension ClientMessage {
         let key: String?
         let mods: [String]?
         let aspect: Double?
+        let mode: String?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -177,6 +190,11 @@ extension ClientMessage {
             return .windowFitPhone(aspect: aspect)
         case "window.restore":
             return .windowRestore
+        case "audio":
+            guard let mode = AudioMode(rawValue: try require(e.mode, "mode")) else {
+                throw ProtocolError.invalidValue("mode")
+            }
+            return .audio(mode: mode)
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -190,7 +208,7 @@ extension ClientMessage {
         switch self {
         case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce: return .socket
         case .move, .scroll: return .motion
-        case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore: return .control
+        case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
         }
     }
 
@@ -211,6 +229,7 @@ extension ClientMessage {
         case .key: return "key"
         case .windowFitPhone: return "window.fitPhone"
         case .windowRestore: return "window.restore"
+        case .audio: return "audio"
         }
     }
 }
@@ -321,6 +340,8 @@ enum ServerMessage {
     case result(id: String, path: String?)
     /// The view moved to the window that ⌘Tab or ⌘F1 brought forward (D38).
     case viewSwitched(windowId: UInt32, app: String, title: String)
+    /// The audio mode the Mac applies (D39): the echo of `audio`, or `off` after a failure.
+    case audioState(mode: AudioMode)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -337,6 +358,7 @@ enum ServerMessage {
         let t = "window.fit"; let windowId: UInt32; let state: WindowFitState; let clamped: Bool
     }
     private struct Switched: Encodable { let t = "view.switched"; let windowId: UInt32; let app: String; let title: String }
+    private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
@@ -379,6 +401,8 @@ enum ServerMessage {
             data = try? encoder.encode(Result(id: id, path: path))
         case .viewSwitched(let id, let app, let title):
             data = try? encoder.encode(Switched(windowId: id, app: app, title: title))
+        case .audioState(let mode):
+            data = try? encoder.encode(Audio(mode: mode))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

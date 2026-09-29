@@ -64,11 +64,21 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .slot.unavailable { opacity: 0.35; }
 .slot.current { border-color: #0a84ff; }
 /* While typing, the text field takes the place of the slots and Fit (D33). */
-#bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window { display: none; }
+#bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window,
+#bottom-bar.typing #audio-mode { display: none; }
 #text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; padding: 8px 0; border-width: 0; }
 #bottom-bar.typing #text { flex: 1; opacity: 1; padding: 8px 10px; border-width: 1px; }
 #keyboard.active, #fit-window.active { background: #0a84ff; }
 #fit-window { width: 44px; padding: 0; font-size: 20px; }
+/* D39: 🔇 Off → 🔊 App → 🔊 All; an orange dot while iOS still needs a tap to start the sound. */
+#audio-mode { position: relative; width: 40px; padding: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; line-height: 1; }
+#audio-mode .icon { font-size: 18px; }
+#audio-mode .mode { font-size: 10px; margin-top: 2px; color: #ccc; }
+#audio-mode.on { background: #0a84ff; }
+#audio-mode.on .mode { color: #fff; }
+#audio-mode.blocked::after { content: ""; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  border-radius: 50%; background: #ff9f0a; }
 
 /* D34: the key panel sits above the bottom bar; the stage ends at its top edge. Both layers
    have three rows: the normal layer's third row is ⌘F1, ⌘Tab (D37), 📋 Paste, and 🖼 Image (D36). */

@@ -33,6 +33,9 @@ protocol SessionBackend: Sendable {
     /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
     /// unavailable.
     func makePeer() -> RTCPeer?
+    /// Starts, retargets, or (nil) stops the Mac audio tap (D39). False if this Mac cannot tap
+    /// audio (macOS before 14.2).
+    func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool
 }
 
 enum CaptureEvent: Sendable {
@@ -138,7 +141,11 @@ actor Session {
     private var closed = false
 
     // Viewing state
-    private var viewingWindowId: UInt32?
+    private var viewingWindowId: UInt32? {
+        didSet { if viewingWindowId == nil { viewedPid = nil } }
+    }
+    /// The viewed window's app, once its capture started; App audio taps it (D39).
+    private var viewedPid: pid_t? { didSet { applyAudio() } }
     private var capture: (any CaptureHandle)?
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
@@ -148,6 +155,11 @@ actor Session {
     private var peer: RTCPeer?
     private var peerNumber: Int?
     private var peerTask: Task<Void, Never>?
+    private var peerConnected = false { didSet { applyAudio() } }
+
+    // Mac audio on the phone (D39): the phone's choice and the tap this session runs.
+    private var audioMode: AudioMode = .off { didSet { applyAudio() } }
+    private var audioApplied: AudioTarget?
 
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
@@ -284,6 +296,40 @@ actor Session {
             await resizeViewedWindow { backend, id in await backend.fitWindow(windowId: id, aspect: aspect) }
         case .windowRestore:
             await resizeViewedWindow { backend, id in await backend.restoreWindow(windowId: id) }
+        case .audio(let mode):
+            audioMode = mode
+            log.info("audio mode=\(mode.rawValue, privacy: .public)")
+            await sendControl(.audioState(mode: mode))
+        }
+    }
+
+    // MARK: Mac audio on the phone (D39)
+
+    /// Runs the tap only while audio is on, the peer connection is connected, and (App mode) a
+    /// window is viewed; anything else stops it, so the Mac is audible again.
+    private func applyAudio() {
+        let target = closed ? nil : AudioTarget.desired(mode: audioMode, peerConnected: peerConnected, viewedPid: viewedPid)
+        guard target != audioApplied else { return }
+        audioApplied = target
+        let ok = backend.setAudio(target) { [weak self] event in
+            Task { await self?.audioEvent(event) }
+        }
+        if !ok {
+            audioApplied = nil
+            Task { await audioEvent(.unavailable) }
+        }
+    }
+
+    private func audioEvent(_ event: AudioEvent) async {
+        guard !closed, audioMode != .off else { return }
+        switch event {
+        case .unavailable:
+            audioMode = .off
+            await sendControl(.error(code: .audioUnavailable, message: "Mac audio is not available on this Mac"))
+            await sendControl(.audioState(mode: .off))
+        case .silent:
+            await sendControl(.error(code: .permissionAudioCapture,
+                                     message: "No audio: allow audio capture in System Settings › Privacy & Security"))
         }
     }
 
@@ -448,6 +494,8 @@ actor Session {
         case .localCandidate(let candidate):
             await send(.rtcIce(pc: pc, candidate: candidate))
         case .connectionState(let state):
+            // D39: audio flows only while connected; a drop stops the tap at once.
+            peerConnected = state == .connected
             // A failed or closed peer connection stops capture and releases a held button and
             // the display assertion (D27). The client starts a fresh one and resumes viewing.
             if state == .failed || state == .closed {
@@ -462,6 +510,7 @@ actor Session {
     }
 
     private func closePeer() {
+        peerConnected = false
         peerTask?.cancel()
         peerTask = nil
         peer?.close()
@@ -492,6 +541,7 @@ actor Session {
         switch result {
         case .started(let handle, let window):
             capture = handle
+            viewedPid = window.pid
             backend.viewingChanged(window)
             await input.setTarget(windowId)
             await hub?.statusChanged(self, .viewing(app: window.app, title: window.title))
