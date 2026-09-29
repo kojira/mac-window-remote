@@ -114,6 +114,15 @@ export class Viewer {
     this.clampAndApply();
   }
 
+  /// The stage size changes in change() (the key panel, D34): keep the zoom relative to fit.
+  keepZoom(change) {
+    const zoom = this.size ? this.scale / this.fitScale() : 1;
+    change();
+    if (!this.size) return;
+    this.scale = this.fitScale() * zoom;
+    this.clampAndApply();
+  }
+
   relayout() {
     if (!this.size) return;
     this.scale = Math.max(this.scale, this.fitScale());

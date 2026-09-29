@@ -1329,8 +1329,9 @@ On a real iPhone against the real Mac:
   large targets. Custom buttons (D13) are not part of this step.
 - **Entry.** ⌨︎ in the bottom bar (D33) toggles the key panel; ⌨︎ is highlighted while
   the panel is open. It no longer opens the iOS keyboard directly; the panel's **text**
-  key does. Closing the panel also hides the iOS keyboard, and leaving the viewer closes
-  the panel.
+  key does. Closing the panel also hides the iOS keyboard, turns every modifier off
+  (including locked ones), and returns to the normal layer; leaving the viewer closes
+  the panel. So modifiers only ever apply while the panel is visible.
 - **Layout.** The panel sits directly above the bottom bar and moves with it above the
   iOS keyboard. Keys are large dark rounded buttons in a grid of six equal columns that
   spans the safe-area width (at most 640 px wide, centered, in landscape). While the
@@ -1368,9 +1369,10 @@ On a real iPhone against the real Mac:
   Japanese input work as in D10); tapping it again while the keyboard is up hides it.
   Panel keys do not take focus, so tapping them keeps the iOS keyboard open.
 - **Auto-repeat.** ←↑↓→, ⌦, PgUp, and PgDn repeat while held: the first `key` on press,
-  then after 400 ms about 15 per second (every 66 ms) until the finger lifts or leaves
-  the key. The modifiers active at the press apply to every repeat. Other keys send once
-  on press.
+  then after 400 ms about 15 per second (every 66 ms) until the finger lifts (or the
+  touch is cancelled, or the page is hidden). A touch stays captured by the key it
+  started on, so sliding off does not stop the repeat. The modifiers active at the press
+  apply to every repeat. Other keys send once on press.
 - **Feedback.** A pressed key shows a brief highlight (iOS Safari has no vibration API).
 - **Protocol.** `key` on the `control` data channel (D28) with optional
   `mods` (default `[]`): `{"t":"key","key":"c","mods":["cmd"]}`. The Mac accepts the key
