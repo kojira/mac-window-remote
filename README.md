@@ -50,7 +50,7 @@ The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, 
 2. Grant **Screen Recording**: click Request or Open Settings, and turn the app on. Then click **Relaunch**.
 3. Grant **Accessibility** the same way.
 4. In Terminal, run the command that Setup shows, once: `tailscale serve --bg http://127.0.0.1:8765`
-5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens; there is no pairing step. To use it from the Home Screen, choose Share → **Add to Home Screen**.
+5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens. To use it from the Home Screen, choose Share → **Add to Home Screen**.
 6. Keep the Mac unlocked while you use it remotely.
 
 If macOS asks whether **MacWindowRemote** may accept incoming network connections, click **Allow**: the video goes directly between the Mac and the iPhone over UDP on the tailnet (WebRTC), not through `tailscale serve`. After a rebuild, macOS may also ask for Screen Recording and Accessibility again; switch the app's entry off and on in System Settings → Privacy & Security.
@@ -59,7 +59,7 @@ If macOS asks whether **MacWindowRemote** may accept incoming network connection
 
 Turn Tailscale on on both the Mac and the iPhone. No port forwarding and no STUN/TURN server are needed: WebRTC connects over the tailnet addresses, and Tailscale relays traffic itself when it cannot make a direct path (that adds latency). If the video does not start, the page says so and offers **Retry**.
 
-The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every request must come from the Tailscale login that owns this Mac: `tailscale serve` sends it in the `Tailscale-User-Login` header, and the app reads the owner from `tailscale status --json`. Other tailnet users, tagged devices, and direct local requests get "Not allowed: sign in to Tailscale as the Mac owner". To allow a different login, set it in Settings → **Allowed Tailscale login**. The app no longer uses a pairing code or the Keychain; an old Keychain item "mac-window-remote" from earlier builds is not read and can be deleted in Keychain Access.
+The server listens on `127.0.0.1` only. It is reachable from the tailnet only through `tailscale serve`, and every request must come from the Tailscale login that owns this Mac: `tailscale serve` sends it in the `Tailscale-User-Login` header, and the app reads the owner from `tailscale status --json`. Other tailnet users, tagged devices, and direct local requests get "Not allowed: sign in to Tailscale as the Mac owner". To allow a different login, set it in Settings → **Allowed Tailscale login**.
 
 ## License
 
