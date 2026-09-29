@@ -146,6 +146,15 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             await InputInjector.type(text)
         case .key(let name, let mods):
             await InputInjector.key(name, mods: mods)
+        case .paste(let text):
+            // The raised window needs to be in front before ⌘V, as before a click (D25).
+            if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+            await MainActor.run {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(text, forType: .string)
+            }
+            await InputInjector.key("v", mods: [.cmd])
         }
         if case .scroll = action.kind { return nil }
         let total = ContinuousClock.now - started

@@ -215,6 +215,70 @@ extension ClientMessage {
     }
 }
 
+// MARK: Binary client → server (D36)
+
+/// A binary WebSocket message (§4.1): `[uint32 BE headerLength][header JSON][payload]`.
+/// Clipboard text and image uploads travel this way on the authenticated WebSocket (D36).
+enum BinaryClientMessage: Equatable {
+    /// Put `text` on the Mac clipboard and paste it into the viewed window.
+    case clipboardPaste(id: String, text: String)
+    /// One chunk of an image; `size` is the whole image, `offset` where `bytes` go.
+    case imageChunk(id: String, size: Int, offset: Int, bytes: Data)
+
+    /// Clipboard text is at most 1 MiB of UTF-8 (D11).
+    static let maxClipboardBytes = 1 << 20
+    /// The phone sends image chunks of this size; the last one may be shorter.
+    static let maxChunkBytes = 256 << 10
+    static let maxHeaderBytes = 1024
+
+    private struct Header: Decodable {
+        let t: String
+        let id: String?
+        let size: Int?
+        let offset: Int?
+    }
+
+    /// Decodes the framing, the header, and its values. A clipboard payload over 1 MiB throws
+    /// `tooLarge` with the id, so the reply can name the request.
+    static func decode(_ data: Data) throws -> BinaryClientMessage {
+        let bytes = [UInt8](data.prefix(4))
+        guard bytes.count == 4 else { throw ProtocolError.malformed }
+        let headerLength = bytes.reduce(0) { $0 << 8 | Int($1) }
+        guard headerLength > 0, headerLength <= maxHeaderBytes, data.count >= 4 + headerLength else {
+            throw ProtocolError.malformed
+        }
+        let start = data.startIndex
+        let headerData = data[(start + 4)..<(start + 4 + headerLength)]
+        let payload = Data(data[(start + 4 + headerLength)...])
+        let h: Header
+        do { h = try JSONDecoder().decode(Header.self, from: headerData) } catch { throw ProtocolError.malformed }
+        guard let id = h.id, !id.isEmpty, id.count <= 64 else { throw ProtocolError.invalidValue("id") }
+        switch h.t {
+        case "clipboard.paste":
+            guard payload.count <= maxClipboardBytes else { throw UploadRejection(id: id, code: .tooLarge) }
+            guard !payload.isEmpty, let text = String(data: payload, encoding: .utf8) else {
+                throw ProtocolError.invalidValue("text")
+            }
+            return .clipboardPaste(id: id, text: text)
+        case "image.chunk":
+            guard let size = h.size, size > 0 else { throw ProtocolError.invalidValue("size") }
+            guard let offset = h.offset, offset >= 0 else { throw ProtocolError.invalidValue("offset") }
+            guard !payload.isEmpty, payload.count <= maxChunkBytes, offset + payload.count <= size else {
+                throw ProtocolError.invalidValue("chunk")
+            }
+            return .imageChunk(id: id, size: size, offset: offset, bytes: payload)
+        default:
+            throw ProtocolError.unknownType(h.t)
+        }
+    }
+}
+
+/// A request rejected with a specific error code and its id (D36).
+struct UploadRejection: Error, Equatable {
+    let id: String
+    let code: ErrorCode
+}
+
 // MARK: Server → client
 
 struct PermissionsStatus: Codable, Equatable {
@@ -253,6 +317,8 @@ enum ServerMessage {
     case thumb(windowId: UInt32, jpeg: Data?)
     /// Result of `window.fitPhone` / `window.restore` (D35).
     case windowFit(windowId: UInt32, state: WindowFitState, clamped: Bool)
+    /// Success of a binary request (D36); `path` is the saved image.
+    case result(id: String, path: String?)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -268,6 +334,7 @@ enum ServerMessage {
     private struct Fit: Encodable {
         let t = "window.fit"; let windowId: UInt32; let state: WindowFitState; let clamped: Bool
     }
+    private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
         let pc: Int
@@ -305,6 +372,8 @@ enum ServerMessage {
             data = try? encoder.encode(Thumb(windowId: id, jpeg: jpeg?.base64EncodedString(), missing: jpeg == nil ? true : nil))
         case .windowFit(let id, let state, let clamped):
             data = try? encoder.encode(Fit(windowId: id, state: state, clamped: clamped))
+        case .result(let id, let path):
+            data = try? encoder.encode(Result(id: id, path: path))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

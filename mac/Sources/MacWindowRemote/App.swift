@@ -40,6 +40,7 @@ final class AppState: ObservableObject {
     private var hub: SessionHub?
     private var serverTask: Task<Void, Never>?
     private var pollTimer: Timer?
+    private var uploadCleanupTimer: Timer?
     private let windows = WindowPresenter()
 
     var permissionsOK: Bool { permissions.screenRecording && permissions.accessibility }
@@ -64,6 +65,7 @@ final class AppState: ObservableObject {
             Task { @MainActor in AppState.shared.connection = status }
         })
         startServer()
+        startUploadCleanup()
         refreshAllowedLogin()
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
             Task { @MainActor in AppState.shared.refreshPermissions() }
@@ -73,6 +75,18 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(true, forKey: firstLaunchKey)
             showSetup()
         }
+    }
+
+    /// Deletes uploaded images older than 24 h at launch and then every hour (D12).
+    private func startUploadCleanup() {
+        let clean: @Sendable () -> Void = {
+            DispatchQueue.global(qos: .utility).async {
+                let removed = UploadStore.standard.removeExpired()
+                if removed > 0 { log.info("uploads cleanup removed=\(removed, privacy: .public)") }
+            }
+        }
+        clean()
+        uploadCleanupTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { _ in clean() }
     }
 
     func refreshPermissions() {

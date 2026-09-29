@@ -93,4 +93,29 @@ private final class FakeBackend: SessionBackend {
             }
         }
     }
+
+    /// D36: binary requests pass the server's frame limit and get an `error` with their id.
+    @Test func binaryRequestsGetRepliesWithTheirId() async throws {
+        try await withServer { client in
+            try await client.ws("/ws", configuration: headers(Self.owner)) { inbound, outbound, _ in
+                var it = inbound.messages(maxSize: 1 << 20).makeAsyncIterator()
+                guard case .text? = try await it.next() else { Issue.record("no hello"); return }
+                func frame(_ header: String, _ payload: Data) -> ByteBuffer {
+                    let h = Data(header.utf8)
+                    let n = UInt32(h.count)
+                    return ByteBuffer(bytes: [UInt8(n >> 24), UInt8(n >> 16 & 0xFF), UInt8(n >> 8 & 0xFF), UInt8(n & 0xFF)] + h + payload)
+                }
+                // Over 1 MiB of text: rejected, and the Mac clipboard is not touched.
+                let big = Data(repeating: 0x61, count: BinaryClientMessage.maxClipboardBytes + 1)
+                try await outbound.write(.binary(frame(#"{"t":"clipboard.paste","id":"c1"}"#, big)))
+                guard case .text(let e1)? = try await it.next() else { Issue.record("no reply"); return }
+                #expect(e1.contains(#""id":"c1""#) && e1.contains(#""code":"too_large""#))
+                // No window is viewed.
+                try await outbound.write(.binary(frame(#"{"t":"image.chunk","id":"i1","size":12,"offset":0}"#, UploadsTests.png)))
+                guard case .text(let e2)? = try await it.next() else { Issue.record("no reply"); return }
+                #expect(e2.contains(#""id":"i1""#) && e2.contains(#""code":"window_not_found""#))
+                try await outbound.close(.normalClosure, reason: nil)
+            }
+        }
+    }
 }

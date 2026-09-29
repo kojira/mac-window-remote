@@ -46,6 +46,17 @@
       <input id="text" type="text" enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="Type, then Return to send">
     </footer>
     </div>
+    <input id="image-file" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+    <div id="paste-sheet" hidden>
+      <div class="sheet">
+        <p>Long-press the box, choose <b>Paste</b>, then paste it into the window.</p>
+        <textarea id="paste-text" rows="5" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+        <div class="actions">
+          <button id="paste-cancel" type="button">Cancel</button>
+          <button id="paste-send" type="button" class="primary">Paste into window</button>
+        </div>
+      </div>
+    </div>
     <div id="slot-menu" hidden>
       <div class="sheet">
         <button type="button" data-act="assign">Assign current window</button>

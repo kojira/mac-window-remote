@@ -7,9 +7,9 @@ import Logging
 /// Hummingbird app: static web client + `/ws` (DESIGN.md D2). Binds to 127.0.0.1 only.
 /// Every request must carry the Mac owner's Tailscale login (D32).
 enum Server {
-    /// Largest client message accepted. Slice 1 only has small JSON text messages;
-    /// image upload (slice 3) raises this to 26 MiB.
-    static let maxMessageSize = 1 << 20
+    /// Largest client message (and frame) accepted: 1 MiB of clipboard text plus its framing
+    /// and header. Images arrive in 256 KiB chunks, so they fit too (D36).
+    static let maxMessageSize = BinaryClientMessage.maxClipboardBytes + 64 * 1024
 
     static func webRoot() -> String? {
         if let dev = ProcessInfo.processInfo.environment["MWR_WEB_ROOT"], !dev.isEmpty { return dev }

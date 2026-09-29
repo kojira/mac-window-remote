@@ -1,5 +1,6 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
-// an fn layer with F1–F12, and a text key that opens the iOS keyboard.
+// an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
+// third row pastes the iPhone clipboard or an image into the window (D36).
 
 const LONG_PRESS_MS = 500;
 const REPEAT_DELAY_MS = 400;
@@ -13,6 +14,7 @@ const NORMAL = [
   { label: '⌃', mod: 'ctrl' }, { label: '⌘', mod: 'cmd' }, { label: '⌥', mod: 'opt' },
   { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
+  { label: '📋 Paste', action: 'paste', wide: true }, { label: '🖼 Image', action: 'image', wide: true },
 ];
 const FN = [
   ...Array.from({ length: 12 }, (_, i) => ({ label: `F${i + 1}`, key: `F${i + 1}` })),
@@ -25,8 +27,9 @@ export class KeyPanel {
   /// sendKey(name, mods): send a `key` message. modifiers: a ModifierState.
   /// textInput: the TextInput (focus/blur of the iOS keyboard field).
   /// onLayout(change): runs change(), which opens, closes, or resizes the panel, and re-fits
-  /// the stage around it.
-  constructor({ panel, toggle, viewerEl, modifiers, textInput, sendKey, onLayout }) {
+  /// the stage around it. onAction('paste' | 'image') runs inside the tap (a user gesture),
+  /// as the clipboard read and the file picker require (D36).
+  constructor({ panel, toggle, viewerEl, modifiers, textInput, sendKey, onLayout, onAction }) {
     this.panel = panel;
     this.toggleButton = toggle;
     this.viewerEl = viewerEl;
@@ -34,6 +37,7 @@ export class KeyPanel {
     this.textInput = textInput;
     this.sendKey = sendKey;
     this.onLayout = onLayout;
+    this.onAction = onAction;
     this.fnLayer = false;
     this.modButtons = [];
     this.textButton = null;
@@ -84,7 +88,9 @@ export class KeyPanel {
       b.type = 'button';
       b.className = 'key';
       b.textContent = spec.label;
+      if (spec.wide) b.classList.add('wide');
       if (spec.text) this.wireText(b);
+      else if (spec.action) this.wireAction(b, spec.action);
       else this.wirePress(b, spec);
       if (spec.mod) { b.dataset.mod = spec.mod; this.modButtons.push(b); }
       if (spec.fn) b.classList.toggle('active', this.fnLayer);
@@ -113,6 +119,22 @@ export class KeyPanel {
     b.addEventListener('click', toggle); // no touch: mouse or keyboard
     b.classList.toggle('active', this.textInput.isFocused());
     this.textButton = b;
+  }
+
+  /// Paste and Image act on touchend (a user gesture, unlike a touch pointerdown) and never
+  /// take focus from the text field.
+  wireAction(b, action) {
+    let touched = false;
+    b.addEventListener('touchstart', (e) => { e.preventDefault(); touched = true; b.classList.add('pressed'); }, { passive: false });
+    b.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      setTimeout(() => b.classList.remove('pressed'), PRESSED_MIN_MS);
+      if (touched) this.onAction(action);
+      touched = false;
+    });
+    b.addEventListener('touchcancel', () => { touched = false; b.classList.remove('pressed'); });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', () => this.onAction(action)); // no touch: mouse or keyboard
   }
 
   /// Other keys act on press and never take focus, so the iOS keyboard stays open.

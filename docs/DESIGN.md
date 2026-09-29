@@ -297,6 +297,8 @@ following:
   break them.
 
 ### D11. Clipboard text (slice 2)
+> *Amended by §16 D36:* 📋 Paste in the key panel always pastes into the viewed window; no
+> preview or Copy to Mac. The text travels as a binary WebSocket message.
 - The **Clipboard** button calls `navigator.clipboard.readText()` inside the tap handler.
   On failure it opens the fallback textarea sheet (D5).
 - The sheet and preview show the first 200 characters and have two actions:
@@ -309,6 +311,9 @@ following:
 - The maximum is 1 MiB of UTF-8. Larger text is rejected with `too_large`.
 
 ### D12. Image → temp file → path (slice 3)
+> *Amended by §16 D36:* 🖼 Image in the key panel pastes the path into the viewed window; no
+> `action`. The image is sent in 256 KiB chunks; the server's frame limit stays small. No
+> "Open uploads folder" menu item yet.
 - The **Image** button opens `<input type="file" accept="image/*">`. iOS offers the photo
   library, the camera, and Files. iOS normally converts HEIC to JPEG for web uploads, and
   whatever arrives is stored as-is.
@@ -1324,6 +1329,7 @@ On a real iPhone against the real Mac:
 ## 14. Key panel (user decision; supersedes the D13 key bar layout)
 
 ### D34. A 2×6 key panel toggled by ⌨︎
+> *Amended by §16 D36:* the normal layer has a third row, 📋 Paste and 🖼 Image.
 - **Why (user request, with a reference image):** the iOS keyboard cannot type Esc, Tab,
   arrows, F-keys, or ⌘/⌃/⌥ shortcuts such as ⌘C, ⌘V, and ⌃C. The panel gives those keys
   large targets. Custom buttons (D13) are not part of this step.
@@ -1511,3 +1517,115 @@ On a real iPhone against the real Mac:
    `window.fitPhone`/`window.restore` decoding (range 0.2–5, missing aspect, wrong
    channel), `window.fit` encoding, and saved-frame bookkeeping (first fit saves, second
    keeps, restore forgets, a failed first fit forgets).
+
+## 16. Paste the iPhone clipboard or an image into the window (user decision; amends D11, D12)
+
+### D36. 📋 Paste and 🖼 Image in the key panel
+- **Why (user request):** "paste the iPhone clipboard contents into the text" and "upload an
+  image and paste its path". Slices 2 and 3 (D11, D12) are implemented in the current
+  architecture (§11–§15), with one default action: the content lands in the focused field of
+  the viewed window.
+- **Placement (amends D34).** The key panel's normal layer gets a third row with two wide
+  keys, each spanning three columns: **📋 Paste** and **🖼 Image**. The first two rows are
+  unchanged; the fn layer is unchanged. Both layers now have three rows, so the panel height
+  no longer changes when fn is toggled. The keys act on touch end (a user gesture, which the
+  clipboard read and the file picker require) and never take focus from the text field.
+- **📋 Paste (amends D11).** Inside the tap, `navigator.clipboard.readText()`; iOS shows its
+  "Paste" callout, and the user taps it.
+  - The text goes to the Mac, which puts it on `NSPasteboard.general` (`clearContents`,
+    `setString`), focuses the viewed window through the D25 focus path (raise once if it is
+    not frontmost, 80 ms before the keystroke only after a raise), and posts ⌘V. It runs in the
+    ordered input pipeline, so it lands after any keys sent before it. The previous Mac
+    clipboard is not restored (D11).
+  - Toast on success: "Pasted N chars" (N = Unicode code points).
+  - If `readText` is missing or rejects (denied, plain HTTP), the **fallback sheet** (D5)
+    opens: "Long-press the box, choose Paste, then paste it into the window.", a textarea,
+    **Cancel**, and **Paste into window**, which sends the textarea's text the same way.
+  - At most 1 MiB of UTF-8. The phone checks first and shows "Text too large (max 1 MiB)";
+    the Mac checks again and replies `too_large`. Either way the Mac clipboard is unchanged.
+  - D11's preview and "Copy to Mac" (`paste: false`) are dropped: the user asked for paste.
+- **🖼 Image (amends D12).** `<input type="file" accept="image/*">` opens inside the tap
+  (photo library, camera, Files). The bytes are uploaded, saved as in D12 (type sniffed from
+  the magic bytes: PNG, JPEG, HEIC/HEIF, GIF, WebP; at most 25 MiB; directory
+  `$TMPDIR/mac-window-remote/uploads/`, mode 0700; name `img-YYYYMMDD-HHMMSS-<4 hex>.<ext>`;
+  files older than 24 h deleted at launch and hourly, nothing outside the directory), and the
+  **path is pasted into the viewed window** the same way as clipboard text (so the path is
+  also left on the Mac clipboard). D12's `action` (`clipboard`/`type`/`none`) is dropped.
+  - Toast on success: "Pasted path: …/img-20260101-030405-0a3f.png" (the file name only).
+  - Images over 2 × 512 KiB show a sticky toast "Uploading… n%", then "Pasting…" until the
+    reply. Input keeps working during an upload.
+  - Errors: over 25 MiB "Image too large (max 25 MiB)" (the phone checks `File.size` first and
+    sends nothing); not an accepted type "Not a supported image (PNG, JPEG, HEIC, GIF, WebP)".
+    Neither leaves a file.
+  - Taking a photo with the camera can hide the page, which closes the socket (D15). A picked
+    image waits up to 10 s for the reconnect and the resumed view before it is sent.
+  - A new pick while an image is still being sent cancels the older one on the phone.
+- **Transport (decision).** Both requests are **binary messages on the authenticated `/ws`**
+  (§4.1 framing: `[uint32 BE headerLength][header JSON][payload]`), not the `control` data
+  channel (amends D22's note). Why: the WebSocket already has the owner check (D32) and a
+  simple size limit, and needs no chunk reassembly across SCTP message limits; the data
+  channel would need its own framing. Raising the server's max frame to 26 MiB for a single
+  image message was rejected: an image would then hold up the socket's pings and signaling
+  for as long as it takes to send, and the server would buffer each 26 MiB frame whole.
+  Instead images are sent in **256 KiB chunks**, and the phone keeps at most 512 KiB in the
+  socket's send buffer, so pings (10 s, D18) and signaling interleave. The server's max
+  message and frame size is **1 MiB + 64 KiB** (clipboard text plus framing).
+  - Phone → Mac:
+    ```jsonc
+    // binary: header {"t":"clipboard.paste","id":"c1"} + UTF-8 text (1 byte – 1 MiB)
+    // binary: header {"t":"image.chunk","id":"i1","size":834512,"offset":0} + ≤ 256 KiB
+    ```
+  - Mac → phone on the WebSocket:
+    ```jsonc
+    {"t":"result","id":"c1","ok":true}
+    {"t":"result","id":"i1","ok":true,"path":"/var/folders/…/T/mac-window-remote/uploads/img-20260101-030405-0a3f.png"}
+    {"t":"error","id":"i1","code":"too_large|unsupported_type|window_not_found|permission_accessibility|bad_request|internal","message":"…"}
+    ```
+  - Validation: header ≤ 1 KiB of JSON; `id` a non-empty string of at most 64 characters;
+    clipboard payload non-empty valid UTF-8 ≤ 1 MiB (over: `too_large` with the id); chunk
+    `size` > 0, `offset` ≥ 0, payload 1 byte – 256 KiB, `offset + payload ≤ size`; anything
+    else `bad_request`.
+  - Assembly on the Mac: chunks arrive in order on the socket. Offset 0 starts an upload
+    (replacing an unfinished one); it is checked at once: `size` > 25 MiB is `too_large`, and
+    the first chunk's magic bytes decide the type (`unsupported_type`). A chunk whose offset
+    is not the bytes received so far, or of another id, is `bad_request`. After a rejection
+    the rest of that upload's chunks are ignored. When `size` bytes have arrived the file is
+    written (never overwriting), then the path is pasted. An upload started while no window
+    is viewed is `window_not_found`.
+  - One reply per request: `result` after ⌘V was posted, or `error`. A paste for a window
+    that is no longer viewed replies `window_not_found`. The socket closing drops pending
+    requests; the phone shows "Upload interrupted — try again".
+- **Logging:** byte counts and types only; never the text or the path.
+- **"Open uploads folder" menu item (D12):** skipped. The path is pasted, so the folder is
+  reachable from it; the item can be added later if wanted.
+- **Source changes:** `Protocol.swift` (`BinaryClientMessage`, `result`), `Uploads.swift`
+  (new: `ImageType` sniffing, `ImageUploadAssembler`, `UploadStore` save and cleanup),
+  `Session.swift` (binary messages), `InputPipeline.swift` and `MacBackend.swift` (`paste`
+  input: pasteboard + ⌘V with a reply), `Server.swift` (max message size), `App.swift`
+  (cleanup at launch and hourly); `web/upload.js` (new: framing and limits),
+  `web/keypanel.js` (third row), `web/app.js` (clipboard read, fallback sheet, image upload,
+  replies, sticky progress toast), `web/index.html`, `web/style.css`.
+
+### D36 acceptance criteria
+On a real iPhone against the real Mac:
+1. The key panel's normal layer shows the unchanged 2×6 keys and a third row with 📋 Paste
+   and 🖼 Image; the fn layer is unchanged; the video re-fits above the panel.
+2. Copy multi-line Japanese text on the iPhone, focus a text field in the viewed Mac window,
+   tap 📋, and tap iOS's Paste callout: the same text (with newlines) appears in the field;
+   the toast says "Pasted N chars". The Mac clipboard holds the text.
+3. If the clipboard read is refused, the sheet appears; long-press → Paste, then
+   **Paste into window** pastes the same way.
+4. Text over 1 MiB shows "Text too large (max 1 MiB)", and the Mac clipboard is unchanged.
+5. 🖼 → pick a photo: the path `/var/folders/…/mac-window-remote/uploads/img-….jpg` is pasted
+   into the focused field, the toast shows "Pasted path: …/img-….jpg", and the file opens as
+   an image. A photo taken with the camera works the same.
+6. A large image (several MiB) shows "Uploading… n%" rising to 100 %, and the cursor and keys
+   still work during the upload.
+7. A non-image file from Files shows "Not a supported image …"; a file over 25 MiB shows
+   "Image too large (max 25 MiB)"; neither leaves a file in the uploads directory.
+8. *Unit:* magic-byte sniffing for each accepted type and rejection of others; chunk assembly
+   (in order, gap, other id, ignored after a rejection, 25 MiB limit); file name format;
+   save with mode 0700; cleanup (older than 24 h deleted, newer kept, nothing outside the
+   directory, subdirectories and links skipped); binary message decoding (framing, header,
+   id, 1 MiB clipboard limit, chunk bounds); `result` encoding; phone-side framing, 1 MiB
+   UTF-8 limit, and chunk coverage.
