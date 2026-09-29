@@ -75,6 +75,26 @@ import Testing
         #expect(throws: ProtocolError.unknownType("frame.ack")) { try decode(#"{"t":"frame.ack","frameId":57}"#) }
     }
 
+    /// D35: fit-to-phone on `control`; aspect finite and within [0.2, 5].
+    @Test func decodesWindowFit() throws {
+        #expect(try decode(#"{"t":"window.fitPhone","aspect":0.4615}"#) == .windowFitPhone(aspect: 0.4615))
+        #expect(try decode(#"{"t":"window.fitPhone","aspect":0.2}"#) == .windowFitPhone(aspect: 0.2))
+        #expect(try decode(#"{"t":"window.fitPhone","aspect":5}"#) == .windowFitPhone(aspect: 5))
+        #expect(try decode(#"{"t":"window.restore"}"#) == .windowRestore)
+        #expect(throws: ProtocolError.invalidValue("aspect")) { try decode(#"{"t":"window.fitPhone"}"#) }
+        #expect(throws: ProtocolError.invalidValue("aspect")) { try decode(#"{"t":"window.fitPhone","aspect":0.19}"#) }
+        #expect(throws: ProtocolError.invalidValue("aspect")) { try decode(#"{"t":"window.fitPhone","aspect":5.01}"#) }
+        #expect(throws: ProtocolError.invalidValue("aspect")) { try decode(#"{"t":"window.fitPhone","aspect":-1}"#) }
+        #expect(throws: ProtocolError.malformed) { try decode(#"{"t":"window.fitPhone","aspect":"wide"}"#) }
+        #expect(throws: ProtocolError.wrongChannel("window.restore")) {
+            try ClientMessage.decode(Data(#"{"t":"window.restore"}"#.utf8), on: .socket)
+        }
+        let fit = try JSONSerialization.jsonObject(
+            with: Data(ServerMessage.windowFit(windowId: 7, state: .fitted, clamped: true).jsonString().utf8)) as! [String: Any]
+        #expect(fit["t"] as? String == "window.fit" && fit["windowId"] as? Int == 7)
+        #expect(fit["state"] as? String == "fitted" && fit["clamped"] as? Bool == true)
+    }
+
     /// D33: thumbnail requests carry at most three window ids.
     @Test func decodesThumbnailRequests() throws {
         #expect(try decode(#"{"t":"thumbs.request","windowIds":[1,2,3]}"#) == .thumbsRequest(windowIds: [1, 2, 3]))

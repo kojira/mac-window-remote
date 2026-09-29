@@ -18,22 +18,27 @@ enum WindowFocuser {
     }
 
     private static func raise(pid: pid_t, bounds: CGRect, title: String?) {
+        guard let window = axWindow(pid: pid, bounds: bounds, title: title) else { return }
+        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+    }
+
+    /// The app's AX window whose frame matches the CG `bounds` (within 1 pt), preferring the
+    /// one with the same title (D8, D35).
+    static func axWindow(pid: pid_t, bounds: CGRect, title: String?) -> AXUIElement? {
         let app = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return }
+              let windows = value as? [AXUIElement] else { return nil }
         let matches = windows.filter { w in
             guard let frame = frame(of: w) else { return false }
             return abs(frame.origin.x - bounds.origin.x) <= 1 && abs(frame.origin.y - bounds.origin.y) <= 1
                 && abs(frame.width - bounds.width) <= 1 && abs(frame.height - bounds.height) <= 1
         }
-        let pick = matches.first { stringAttribute($0, kAXTitleAttribute) == title } ?? matches.first
-        guard let window = pick else { return }
-        AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-        AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+        return matches.first { stringAttribute($0, kAXTitleAttribute) == title } ?? matches.first
     }
 
-    private static func frame(of element: AXUIElement) -> CGRect? {
+    static func frame(of element: AXUIElement) -> CGRect? {
         var pos: CFTypeRef?
         var size: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &pos) == .success,

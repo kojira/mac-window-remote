@@ -21,6 +21,10 @@ protocol SessionBackend: Sendable {
     /// A small JPEG of each window, in request order; nil for a window that is not on screen
     /// or cannot be captured (D33).
     func thumbnails(windowIds: [UInt32]) async -> [(windowId: UInt32, jpeg: Data?)]
+    /// Resizes the viewed window to `aspect` on its screen, saving its frame first (D35).
+    func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome
+    /// Puts the window back to its frame before the first fit (D35).
+    func restoreWindow(windowId: UInt32) async -> WindowFitOutcome
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
     /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
@@ -256,6 +260,33 @@ actor Session {
             await input.submit(.text(text))
         case .key(let name, let mods):
             await input.submit(.key(name, mods: mods))
+        case .windowFitPhone(let aspect):
+            await resizeViewedWindow { backend, id in await backend.fitWindow(windowId: id, aspect: aspect) }
+        case .windowRestore:
+            await resizeViewedWindow { backend, id in await backend.restoreWindow(windowId: id) }
+        }
+    }
+
+    // MARK: Fit window to the phone (D35)
+
+    private func resizeViewedWindow(_ action: (any SessionBackend, UInt32) async -> WindowFitOutcome) async {
+        guard let windowId = viewingWindowId, capture != nil else {
+            await sendControl(.error(code: .windowNotFound, message: "Window not found"))
+            return
+        }
+        switch await action(backend, windowId) {
+        case .done(let state, let clamped):
+            await sendControl(.windowFit(windowId: windowId, state: state, clamped: clamped))
+        case .failed(let code):
+            let message: String
+            switch code {
+            case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
+            case .windowFullscreen: message = "Full-screen windows can't be resized"
+            case .windowNotFitted: message = "Window size was already restored"
+            case .windowNotFound: message = "Window not found"
+            default: message = "This window can't be resized"
+            }
+            await sendControl(.error(code: code, message: message))
         }
     }
 
