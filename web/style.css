@@ -95,7 +95,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
   border-radius: 50%; background: #ff9f0a; }
 
 /* D34: the key panel sits above the bottom bar; the stage ends at its top edge. Both layers
-   have three rows: the normal layer's third row is ⌘F1, ⌘Tab (D37), 📋 Paste, and 🖼 Image (D36). */
+   have three rows: the normal layer's third row is ⌘F1, ⌘Tab (D37), space, ⏎, and ⋯ (D41). */
 #viewer { --key-h: 50px; --panel-rows: 3; --panel-h: calc(var(--panel-rows) * (var(--key-h) + 6px) + 6px); }
 @media (max-height: 500px) { #viewer { --key-h: 38px; } }
 #viewer.panel-open #stage { bottom: calc(56px + var(--panel-h) + env(safe-area-inset-bottom)); }
@@ -104,7 +104,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #key-panel { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: var(--key-h); gap: 6px;
   height: var(--panel-h); padding: 6px max(calc(env(safe-area-inset-right) + 8px), calc((100% - 640px) / 2))
   0 max(calc(env(safe-area-inset-left) + 8px), calc((100% - 640px) / 2));
-  background: #1c1c1e; border-top: 1px solid #2c2c2e; }
+  background: #1c1c1e; border-top: 1px solid #2c2c2e; position: relative; }
 .key { min-width: 0; padding: 0; border-radius: 10px; background: #2c2c2e; color: #fff; font-size: 20px;
   -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
 .key:active, .key.pressed { background: #5a5a5e; }
@@ -113,6 +113,12 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .key.locked { background: #0a84ff; box-shadow: inset 0 0 0 3px #fff; }
 .key.wide { grid-column: span 2; font-size: 18px; }
 .key.combo { font-size: 16px; white-space: nowrap; }
+/* D41: the ⋯ menu, a popover above the panel's right edge; it covers only its own area, so
+   the trackpad keeps working elsewhere. */
+.key-menu { position: absolute; bottom: calc(100% + 6px); right: max(calc(env(safe-area-inset-right) + 8px), calc((100% - 640px) / 2));
+  z-index: 4; display: flex; flex-direction: column; gap: 6px; padding: 6px; min-width: 150px;
+  background: rgba(44, 44, 46, 0.97); border-radius: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+.key-menu .key { height: var(--key-h); padding: 0 14px; text-align: left; font-size: 18px; }
 /* D36: the image picker is opened by 🖼; it stays rendered (not display: none) so iOS opens it. */
 #image-file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
 /* D36: the clipboard fallback sheet (D5), near the top so the iOS keyboard does not cover it. */
