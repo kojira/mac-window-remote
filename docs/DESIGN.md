@@ -4,7 +4,7 @@ Status: **Slice 1 implemented, then replaced by revision 2 (§11: WebRTC video a
 trackpad-style input), which is implemented and awaits acceptance on a real iPhone.
 §12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
-D13 key bar with a key panel.** Sections marked *Superseded by §11* describe
+D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -1400,3 +1400,112 @@ On a real iPhone against the real Mac:
 6. *Unit:* Mac `key` decoding with `mods` (valid, unknown, repeated), the `KeyMap` table
    and combo event order; the web modifier state machine (arm, one-shot, lock, disarm on
    text) and character → key mapping.
+
+## 15. Fit the Mac window to the phone (user decision)
+
+### D35. A toggle that resizes the viewed window to the phone's aspect ratio, with restore
+- **Why (user request):** a wide Mac window shown on a portrait phone is tiny. Resizing
+  the window itself to the phone's shape uses the whole screen without zooming and panning.
+- **Button.** The bottom bar gets **📱** (accessible label "Fit window to phone"; while
+  active "Restore window size") right after **Fit**. Order: ‹, slots, Fit, 📱, ⌨︎. It is
+  hidden while typing, like the slots and Fit (D33). It is highlighted (as ⌨︎ is) while the
+  viewed window is fitted.
+  - Tap while not active: send `window.fitPhone` with `aspect` = the stage's
+    `clientWidth / clientHeight`. The stage is the visible video area: the screen inside
+    the safe area, minus the bottom bar and, when open, the key panel (D33, D34).
+  - Tap while active: send `window.restore`.
+  - The highlight follows the Mac's `window.fit` reply, not the tap.
+- **Phone state.** A `Map` windowId → fitted, in memory only (a page reload forgets it; the
+  Mac still restores correctly, see below). Switching windows with the slots or the list
+  keeps each window's state, and the button shows the state of the viewed window. Phone
+  rotation or opening the key panel while fitted does **not** resize again; to refit, the
+  user taps twice (restore, then fit). A fit for a window the Mac already fitted (e.g.
+  after a page reload lost the phone state) is accepted and keeps the original frame.
+- **Protocol** (`control` data channel, D22/D28), client → server:
+  ```jsonc
+  {"t":"window.fitPhone","aspect":0.4615}   // width / height of the visible video area
+  {"t":"window.restore"}
+  ```
+  Server → client:
+  ```jsonc
+  {"t":"window.fit","windowId":1234,"state":"fitted|restored","clamped":false}
+  {"t":"error","code":"window_not_resizable|window_fullscreen|window_not_fitted|window_not_found|permission_accessibility","message":"…"}
+  ```
+  - `aspect` must be a finite number in [0.2, 5]; otherwise `bad_request`. Both apply to
+    the window being viewed (the input target); when nothing is viewed the reply is
+    `window_not_found`. Both are `bad_request` on the WebSocket (wrong channel).
+  - `windowId` in the reply tells the phone which window's state to update, because the
+    user may switch windows before the reply arrives.
+- **Mac: fit** (Accessibility API on the target window, no private APIs):
+  1. Accessibility permission is required (`permission_accessibility`).
+  2. Find the AX window of the viewed window's app whose frame matches the CG bounds, as
+     the focuser does (D8/D25). None found: `window_not_resizable`.
+  3. `AXFullScreen` true: `window_fullscreen`; nothing is touched.
+  4. `AXSize` not settable: `window_not_resizable`; nothing is touched.
+  5. **Screen:** convert every `NSScreen.frame` and `visibleFrame` (AppKit, bottom-left
+     origin, the primary screen at 0,0) to the AX/CG global space (top-left origin of the
+     primary screen): `y' = primaryHeight − (y + height)`. The window's screen is the one
+     whose frame has the largest intersection with the window's AX frame (the primary
+     screen if none intersects). The target area is that screen's visible frame (no menu
+     bar, no Dock).
+  6. **Target rect:** the largest size with the requested aspect inside the visible frame,
+     each side rounded down to whole points, centered in the visible frame (origin rounded
+     down to whole points).
+  7. **Saved frame:** if the window has no saved frame yet, its current AX frame is saved
+     (in memory, keyed by windowId, for the process lifetime). A fit while already fitted
+     (e.g. after rotation) keeps the first saved frame.
+  8. Set `AXPosition` to the target origin, then `AXSize`, then read `AXSize` back. The app
+     may clamp it (minimum/maximum size, fixed width). The window is then re-centered in
+     the visible frame with its actual size (if it is larger than the visible frame, its
+     top-left goes to the visible frame's top-left, so the title bar stays reachable).
+     `clamped` is true when the actual size differs from the target by more than 1 pt in
+     either dimension.
+  9. If setting `AXSize` fails, the position is set back, a frame saved by this request is
+     forgotten, and the reply is `window_not_resizable`.
+- **Mac: restore.** No saved frame for the viewed window: `window_not_fitted`. Fullscreen:
+  `window_fullscreen` (the saved frame is kept). Otherwise set `AXPosition`, `AXSize`,
+  then `AXPosition` again to the saved frame (the second position covers apps that move
+  the window when its size changes), read back the size, forget the saved frame, and reply
+  `restored` with `clamped` as above.
+- **Capture follows the new size** with no new code: the 500 ms bounds poll (D4) sees the
+  size change and calls `stream.updateConfiguration`; the encoder follows (D21) and the
+  `<video>` intrinsic size changes. On a `window.fit` reply for the viewed window the
+  phone fits the view (zoom 1) and fits again at the next intrinsic size change, so the
+  resized window fills the stage.
+- **Phone error toasts:** `window_not_resizable` "This window can't be resized";
+  `window_fullscreen` "Full-screen windows can't be resized"; `window_not_fitted` clears
+  the button's state (the Mac forgot, e.g. after it restarted) and shows "Window size was
+  already restored".
+- **Non-goals:** persisting saved frames across Mac app restarts; auto-refit on rotation
+  or key panel changes; restoring automatically when the viewer closes; windows closed
+  while fitted keep a stale in-memory entry until the app quits (a few bytes).
+- **Source changes:** `Protocol.swift` (`window.fitPhone`, `window.restore`, `window.fit`,
+  error codes), `Session.swift`, `MacBackend.swift`, `WindowFit.swift` (new: pure rect math
+  and saved-frame bookkeeping), `WindowResizer.swift` (new: AX read/write),
+  `WindowFocuser.swift` (the AX window lookup is shared); `web/index.html`,
+  `web/style.css`, `web/app.js`, `web/viewer.js` (fit on the next size).
+
+### D35 acceptance criteria
+On a real iPhone against the real Mac:
+1. 📱 sits between Fit and ⌨︎ in portrait and landscape; it is hidden while typing.
+2. In portrait, tapping 📱 on a wide window makes the Mac window tall and narrow, centered
+   on its screen, inside the menu bar and Dock; the phone shows it filling the stage
+   within about a second; 📱 is highlighted.
+3. Tapping 📱 again puts the window back at its original size and position; the highlight
+   goes away; the view re-fits.
+4. With the key panel open, a fit uses the smaller area above the panel.
+5. Fitted, rotate to landscape: nothing resizes. Tap (restore) then tap (fit): the window
+   takes the landscape shape; restore still returns the original frame from before the
+   first fit.
+6. Fit window A, switch to B with a slot: 📱 is not highlighted; back to A: highlighted,
+   and restore works.
+7. A window on a second display is fitted on that display.
+8. A non-resizable window (e.g. a fixed-size panel) shows "This window can't be resized";
+   a window with a minimum size is fitted as close as possible and centered; a full-screen
+   window shows "Full-screen windows can't be resized" and is not touched.
+9. *Unit:* aspect-fit rect (wide and tall aspects, whole-point rounding, centering, a
+   visible frame with a non-zero origin), AppKit → AX conversion and screen choice for a
+   screen left of and above the primary screen, re-centering of a clamped size,
+   `window.fitPhone`/`window.restore` decoding (range 0.2–5, missing aspect, wrong
+   channel), `window.fit` encoding, and saved-frame bookkeeping (first fit saves, second
+   keeps, restore forgets, a failed first fit forgets).
