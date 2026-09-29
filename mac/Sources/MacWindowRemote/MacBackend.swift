@@ -217,23 +217,30 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             return nil
         }
         // Everything else needs the window in front: raise once if it is not (D25). With child
-        // windows, the child under a click, or a child already in front, is kept in front (D44).
+        // windows, a click focuses the included window under it (never raising the viewed
+        // window over a child), and keys go to an adopted child in front (D44).
         var focus = WindowFocuser.Outcome.alreadyFront
         if case .dragEnd = action.kind {} else {
-            var target = action.windowId
+            var target = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
+            var isClick = false
             if let composite {
                 let entries = ChildWindows.onScreenEntries()
                 switch action.kind {
                 case .click, .rightClick, .dragStart:
-                    target = ChildWindows.focusTarget(at: p, viewedId: action.windowId,
-                                                      childIds: composite.childIds, entries: entries)
+                    isClick = true
+                    target = ChildWindows.focusTarget(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
+                                                      pid: pid, childIds: composite.childIds, entries: entries)
                 default:
-                    target = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
+                    let id = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
                                                     entries: entries)
+                    if id != action.windowId, let childBounds = WindowCatalog.currentBounds(id) {
+                        target = ChildWindows.Entry(id: id, pid: pid, layer: 0, frame: childBounds)
+                    }
                 }
             }
-            if let targetBounds = target == action.windowId ? windowBounds : WindowCatalog.currentBounds(target) {
-                focus = WindowFocuser.focus(windowId: target, pid: pid, bounds: targetBounds)
+            focus = WindowFocuser.focus(windowId: target.id, pid: pid, bounds: target.frame, layer: target.layer)
+            if isClick {
+                log.notice("click target id=\(target.id, privacy: .public) viewed=\(action.windowId, privacy: .public) layer=\(target.layer, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
             }
         }
         switch action.kind {

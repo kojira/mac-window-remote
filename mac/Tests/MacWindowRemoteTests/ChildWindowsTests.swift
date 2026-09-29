@@ -108,16 +108,40 @@ import Testing
 
     // MARK: Input focus
 
-    @Test func aClickOnAnAdoptedWindowKeepsItInFrontAndOtherClicksRaiseTheViewedWindow() {
+    func target(_ x: CGFloat, _ y: CGFloat, _ ids: [UInt32], _ entries: [E]) -> UInt32 {
+        ChildWindows.focusTarget(at: CGPoint(x: x, y: y), viewedId: 1, viewedFrame: Self.viewed, pid: 20,
+                                 childIds: ids, entries: entries).id
+    }
+
+    @Test func aClickFocusesTheIncludedWindowUnderItInFrontToBackOrder() {
         let entries = [Self.e(5, 150, 150, 100, 100),                 // floating child
                        Self.e(8, layer: 0, 950, 100, 400, 500),       // adopted child
                        Self.e(1, layer: 0, 100, 100, 800, 600),
                        Self.e(9, pid: 30, layer: 0, 0, 0, 1512, 982)] // another app behind
         let ids: [UInt32] = [5, 8]
-        #expect(ChildWindows.focusTarget(at: CGPoint(x: 1000, y: 200), viewedId: 1, childIds: ids, entries: entries) == 8)
-        #expect(ChildWindows.focusTarget(at: CGPoint(x: 160, y: 160), viewedId: 1, childIds: ids, entries: entries) == 1)
-        #expect(ChildWindows.focusTarget(at: CGPoint(x: 500, y: 500), viewedId: 1, childIds: ids, entries: entries) == 1)
-        #expect(ChildWindows.focusTarget(at: CGPoint(x: 1000, y: 800), viewedId: 1, childIds: ids, entries: entries) == 1)
+        #expect(target(1000, 200, ids, entries) == 8)
+        #expect(target(160, 160, ids, entries) == 5)   // the floating child, not the viewed window
+        #expect(target(500, 500, ids, entries) == 1)
+        #expect(target(1000, 800, ids, entries) == 1)  // no included window there
+    }
+
+    @Test func fullScreenSystemOverlaysInFrontDoNotHideTheChildUnderAClick() {
+        // As in the real list: the Dock and Notification Center have transparent full-screen
+        // windows (layers 20, 21) in front of every app window.
+        let entries = [Self.e(134, pid: 40, layer: 21, 0, 0, 1512, 982),
+                       Self.e(28, pid: 41, layer: 20, 0, 0, 1512, 982),
+                       Self.e(5, 300, 300, 400, 300),                 // Settings panel over W
+                       Self.e(1, layer: 0, 100, 100, 800, 600)]
+        let hit = ChildWindows.focusTarget(at: CGPoint(x: 350, y: 310), viewedId: 1, viewedFrame: Self.viewed,
+                                           pid: 20, childIds: [5], entries: entries)
+        #expect(hit == Self.e(5, 300, 300, 400, 300))
+        #expect(target(150, 150, [5], entries) == 1)
+    }
+
+    @Test func aChildBehindTheViewedWindowIsNotTheTargetWhereTheViewedWindowCoversIt() {
+        let entries = [Self.e(1, layer: 0, 100, 100, 800, 600), Self.e(8, layer: 0, 300, 300, 800, 300)]
+        #expect(target(400, 400, [8], entries) == 1)   // W is in front there
+        #expect(target(1000, 400, [8], entries) == 8)  // only the child is there
     }
 
     @Test func keysGoToAnAdoptedWindowOnlyWhileItIsTheFrontNormalWindow() {

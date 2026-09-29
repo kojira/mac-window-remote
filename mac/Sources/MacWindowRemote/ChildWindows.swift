@@ -72,21 +72,22 @@ enum ChildWindows {
             || abs(a.width - b.width) >= 1 || abs(a.height - b.height) >= 1
     }
 
-    /// The window a click at global point `point` lands on: the frontmost of `entries` (front
-    /// to back) containing it, if that is the viewed window or one of `childIds`; nil when
-    /// something else (another app, the desktop) is there.
+    /// The included window under global point `point`: the frontmost of `entries` (front to
+    /// back, as `CGWindowListCopyWindowInfo(.optionOnScreenOnly)`) that is the viewed window or
+    /// one of `childIds` and contains the point; nil when none does. Other windows (other apps,
+    /// transparent overlays, system windows) are skipped, as the video shows only the included
+    /// ones.
     static func hit(_ point: CGPoint, viewedId: UInt32, childIds: [UInt32], entries: [Entry]) -> Entry? {
-        guard let front = entries.first(where: { $0.frame.contains(point) }),
-              front.id == viewedId || childIds.contains(front.id) else { return nil }
-        return front
+        entries.first { ($0.id == viewedId || childIds.contains($0.id)) && $0.frame.contains(point) }
     }
 
-    /// The window to bring forward before a click at `point` (D25, D44): an adopted normal
-    /// child under the point, so raising does not bury it under the viewed window; otherwise
-    /// the viewed window (floating children stay above it anyway).
-    static func focusTarget(at point: CGPoint, viewedId: UInt32, childIds: [UInt32], entries: [Entry]) -> UInt32 {
-        guard let hit = hit(point, viewedId: viewedId, childIds: childIds, entries: entries), hit.layer == 0 else { return viewedId }
-        return hit.id
+    /// The window to focus before a click at `point` (D25, D44): the included window under the
+    /// point, so a click on a child never raises the viewed window above it; the viewed window
+    /// (at `viewedFrame`, layer 0) when no included window is there.
+    static func focusTarget(at point: CGPoint, viewedId: UInt32, viewedFrame: CGRect, pid: pid_t,
+                            childIds: [UInt32], entries: [Entry]) -> Entry {
+        hit(point, viewedId: viewedId, childIds: childIds, entries: entries)
+            ?? Entry(id: viewedId, pid: pid, layer: 0, frame: viewedFrame)
     }
 
     /// The window keys, text, and menu items go to (D25, D44): an adopted normal child that is

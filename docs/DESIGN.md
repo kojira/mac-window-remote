@@ -2135,15 +2135,22 @@ On a real iPhone against the real Mac:
   (`updateContentFilter` + `updateConfiguration`). Without children, the stream is the plain
   window capture exactly as before (D4).
 - **Input.** The phone's normalized cursor maps across the composite area, so a tap on a child
-  lands at its real screen position. A click on an adopted normal child raises that child
-  instead of W; keys go to an adopted child while it is the front normal window, else W (D25).
+  lands at its real screen position. A click focuses the included window under it: the first
+  of W and the children containing the point in the front-to-back on-screen window list
+  (`CGWindowListCopyWindowInfo(.optionOnScreenOnly)`), skipping every other window (other apps,
+  the Dock's and Notification Center's transparent full-screen windows). A click on a child
+  never raises W over it. A normal target is left alone when it is already the front normal
+  window; a floating one when its app is frontmost and it is the focused window; otherwise it
+  is activated and AX-raised (D8). Each click logs the target id and focus outcome. Keys go to
+  an adopted child while it is the front normal window, else W (D25).
   `menu.press` never switches the view; a window it opens appears in the composite.
 - **Limits.** Children on another display and a W spanning displays are not composited. The
   composite shows whatever of P's included windows covers W as on screen (other apps' windows
   are left out). D35 fit resizes W only; with children the video aspect is the composite's.
   A child appears up to about 0.5 s after it opens. Windows P opened before viewing W (except
   floating ones) never join.
-- **Source changes:** `ChildWindows.swift`, `CaptureSession.swift`, `MacBackend.swift`.
+- **Source changes:** `ChildWindows.swift`, `CaptureSession.swift`, `MacBackend.swift`,
+  `WindowFocuser.swift`.
 
 ### D44 acceptance criteria
 On the real Mac and iPhone:
@@ -2156,4 +2163,5 @@ On the real Mac and iPhone:
 4. A window with no floating or new windows streams exactly as before.
 5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), adoption of new layer-0
    windows, kept until closed, pre-existing excluded, union and display clamping, no children
-   ⇒ plain window, change detection, click/key focus targets (`ChildWindowsTests`).
+   ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
+   order past other apps' and system overlay windows (`ChildWindowsTests`).
