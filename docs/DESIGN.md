@@ -2,7 +2,8 @@
 
 Status: **Slice 1 implemented, then replaced by revision 2 (§11: WebRTC video and
 trackpad-style input), which is implemented and awaits acceptance on a real iPhone.
-§12 (D32) replaces pairing with the Mac owner's Tailscale identity.** Sections marked *Superseded by §11* describe
+§12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
+viewer's top bar with a bottom bar that has quick-switch slots.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -494,7 +495,8 @@ Unpaired ──code/QR──▶ Connecting ──hello──▶ WindowList ─�
      shown)."
 3. **Viewer.**
    - **Top bar** (auto-hides after 3 s, and tapping the top edge shows it): ‹ Windows,
-     title (App — Title), a **Fit** button, and a connection dot.
+     title (App — Title), a **Fit** button, and a connection dot. *(Replaced by §13 D33:
+     no top bar; ‹, quick-switch slots, and Fit are in the bottom bar.)*
    - **Canvas:** the rest of the screen, black letterbox, with the gestures in D14.
    - **Bottom bar,** always visible and moving above the keyboard using
      `visualViewport`:
@@ -1236,3 +1238,82 @@ channels. The interim WebSocket input and the JPEG frames of step 1 are gone.
   account as the Mac, run the `tailscale serve` command once, and open the https URL it
   prints in Safari (optionally Share → Add to Home Screen).
 
+
+## 13. Viewer bottom bar and quick-switch slots (user decision)
+
+### D33. No top bar; back, Fit, and three quick-switch slots in the bottom bar
+- **Why (user decision, after using revision 2 on the iPhone):** the auto-hiding top bar
+  (§3) was undiscoverable: nothing showed that tapping the top edge brings it back, so
+  the way back to the window list and Fit were effectively hidden. Switching between a
+  few windows also took a trip through the list every time.
+- **Layout.** The viewer has no top bar and no top-edge tap. The bottom bar is always
+  visible and, left to right, holds **‹** (back to the window list, with the small
+  connection dot on its corner), **slot 1–3**, **Fit**, and **⌨︎**. While typing (D10)
+  the slots and Fit are hidden so the text field has room; ‹ and ⌨︎ stay. The video stage
+  fills the screen above the bottom bar, inside the safe-area insets (top, left, right;
+  the bar's own padding covers the bottom inset). The bar still moves above the
+  keyboard. The window title is no longer shown in the viewer.
+- **Slots.** Up to three, stored on the phone in `localStorage` (`mwr.slots`) as
+  `{windowId, app, title}` or empty. Window ids change when an app restarts, so a slot
+  is resolved against the latest window list (`windows`):
+  1. a window with the same `windowId`;
+  2. else a window with the same app and title (the first in list order);
+  3. else the only window of the same app;
+  4. else the slot is **unavailable** (greyed).
+  A slot resolved to a window stores that window's current id and title, so the next
+  resolution matches by id. Before the first list arrives, a slot is used as stored.
+- **Slot actions.**
+  - Tap an empty slot ("+"): assign the currently viewed window to it.
+  - Tap an assigned slot: switch the viewer to that window at once with `view.start`
+    (the same path as picking from the list). Tapping the slot of the current window
+    does nothing.
+  - Tap an unavailable slot, or long-press (500 ms) any slot: a small menu with
+    **Assign current window** and **Clear**; tapping outside closes it.
+  - The slot of the window being viewed is highlighted.
+- **Switching keeps the peer connection.** The capture track is fed by one custom
+  capturer (D21) and `view.start` while viewing already stops the old capture and starts
+  the new one (D18), so the video track, the data channels, and the ICE path stay; there
+  is no renegotiation. The phone shows the new window's first frame as in D21
+  (`awaitFirstFrame`).
+- **Thumbnails.** Each assigned, resolved slot shows a small image of its window. Without
+  one it shows the app name.
+  - Phone → Mac on the WebSocket: `{"t":"thumbs.request","windowIds":[1234,5678]}`, at
+    most 3 ids (more, or a missing array, is `bad_request`).
+  - Mac → phone, one message per requested id:
+    `{"t":"thumb","windowId":1234,"jpeg":"<base64>"}`, or
+    `{"t":"thumb","windowId":1234,"missing":true}` when the window is not on screen
+    (closed, minimized, another Space), capture fails, or Screen Recording is missing.
+  - The Mac takes one `SCShareableContent` snapshot per request and uses
+    `SCScreenshotManager` for each id: long edge at most 160 px, no cursor, no shadow,
+    JPEG quality 0.6. A newer request cancels the replies of an older one still in
+    progress. Thumbnails are only for the requested slot windows, never the whole list.
+  - When the phone requests: when the viewer opens, after a reconnect, every 10 s while
+    the viewer is visible, and at once when a slot changes. On open, reconnect, and the
+    10 s tick the phone first sends `windows.list`, resolves the slots against the reply,
+    then requests thumbnails for the resolved ones, so a restarted app is re-resolved
+    within 10 s. Thumbnails are kept in memory only.
+- **Source changes:** `web/index.html`, `web/style.css`, `web/viewer.js` (top bar and
+  top-edge tap removed), `web/app.js` (slots wiring, `thumb` handling, 10 s tick),
+  `web/slots.js` (new: pure slot resolution and `thumb` decode), `web/slotbar.js` (new:
+  slot buttons and menu); `Protocol.swift` (`thumbs.request`, `thumb`), `Session.swift`,
+  `MacBackend.swift`, `WindowThumbnail.swift` (new: screenshot and JPEG encode).
+
+### D33 acceptance criteria
+On a real iPhone against the real Mac:
+1. The viewer shows no top bar; the bottom bar shows ‹ (with the connection dot), three
+   slots, Fit, and ⌨︎ in that order, with nothing under the notch or home indicator in
+   portrait and landscape. The video uses the full height above the bar.
+2. ‹ returns to the window list; Fit resets zoom and pan; tapping near the top of the
+   video is an ordinary click.
+3. Tapping an empty slot assigns the current window; its thumbnail appears within about
+   a second and it is highlighted. Tapping another assigned slot switches to that window
+   within about a second without "Connecting video…", and the highlight moves.
+4. Long-press on a slot shows Assign current window / Clear; both work.
+5. Slots survive closing and reopening Safari. After quitting and relaunching an app
+   whose window is in a slot, the slot finds the new window (same title, or the app's
+   only window) within 10 s; if the window is gone the slot is greyed and tapping it
+   offers Clear.
+6. Thumbnails refresh about every 10 s while the viewer is open, and no `thumbs.request`
+   is sent while the list is shown or Safari is in the background.
+7. *Unit:* slot resolution rules 1–4; `thumbs.request` decoding (including more than 3
+   ids and a missing array); `thumb` encoding and the phone's `thumb` decoding.
