@@ -94,6 +94,17 @@ private final class PasteRecordingBackend: SessionBackend, @unchecked Sendable {
                 guard let r2 = try await nextText() else { Issue.record("no reply"); return }
                 #expect(r2.contains(#""t":"result""#) && r2.contains(#""id":"c1""#))
                 #expect(backend.pasted.last == "行1\n行2")
+
+                // Any file (D42): saved as <UUID>/<name> and its path pasted.
+                let pdf = Data("%PDF-1.7\n".utf8)
+                try await outbound.write(.binary(Self.frame(
+                    #"{"t":"file.chunk","id":"f1","size":\#(pdf.count),"offset":0,"name":"My Report.pdf"}"#, pdf)))
+                guard let r3 = try await nextText() else { Issue.record("no reply"); return }
+                #expect(r3.contains(#""t":"result""#) && r3.contains(#""id":"f1""#))
+                let pasted = URL(fileURLWithPath: backend.pasted.last ?? "")
+                #expect(pasted.lastPathComponent == "My Report.pdf")
+                #expect(UUID(uuidString: pasted.deletingLastPathComponent().lastPathComponent) != nil)
+                #expect(try Data(contentsOf: pasted) == pdf)
                 try await outbound.close(.normalClosure, reason: nil)
             }
         }

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CLIPBOARD_MAX_BYTES, clipboardMessage, encodeBinaryMessage, imageChunkMessages, shortPath,
+  CLIPBOARD_MAX_BYTES, clipboardMessage, encodeBinaryMessage, fileChunkMessages, imageChunkMessages, shortPath,
 } from '../../web/upload.js';
 
 function decode(bytes) {
@@ -37,6 +37,20 @@ test('image chunks cover the image exactly, in order', () => {
   const last = decode(chunks[2].data);
   assert.deepEqual(last.header, { t: 'image.chunk', id: 'i1', size: 10, offset: 8 });
   assert.deepEqual([...last.payload], [8, 9]);
+});
+
+test('file chunks (D42) carry the file name on the first chunk only', () => {
+  const bytes = new Uint8Array(10);
+  const chunks = [...fileChunkMessages('f1', 'My Report.pdf', bytes, 4)].map((c) => decode(c.data).header);
+  assert.deepEqual(chunks, [
+    { t: 'file.chunk', id: 'f1', size: 10, offset: 0, name: 'My Report.pdf' },
+    { t: 'file.chunk', id: 'f1', size: 10, offset: 4 },
+    { t: 'file.chunk', id: 'f1', size: 10, offset: 8 },
+  ]);
+  // A very long name keeps its end (the extension) and fits the Mac's 1 KiB header limit.
+  const long = [...fileChunkMessages('f2', '𠮷'.repeat(500) + '.pdf', bytes)][0].data;
+  assert.ok(new DataView(long.buffer).getUint32(0) <= 1024);
+  assert.ok(decode(long).header.name.endsWith('𠮷.pdf'));
 });
 
 test('the toast shows only the file name of the path', () => {

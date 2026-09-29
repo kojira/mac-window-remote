@@ -9,7 +9,7 @@ import { KeyPanel } from './keypanel.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
-  IMAGE_MAX_BYTES, clipboardMessage, imageChunkMessages, shortPath,
+  FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages, shortPath,
 } from './upload.js';
 
 /// The viewed window {id, app, title} (D33: slots store the app and title too).
@@ -724,14 +724,31 @@ $('image-file').addEventListener('change', () => {
   if (file) uploadImage(file);
 });
 
-async function uploadImage(file) {
-  if (file.size > IMAGE_MAX_BYTES) { toast('Image too large (max 25 MiB)'); return; }
-  if (file.size === 0) { toast('The image is empty'); return; }
+/// 📎 (D42): any file, no accept filter, so iOS offers Files, Photo Library, and Take Photo.
+/// Like 🖼, the picker must open inside the tap.
+function pickFile() {
+  if (!canUpload()) return;
+  const input = $('any-file');
+  input.value = '';
+  input.click();
+}
+
+$('any-file').addEventListener('change', () => {
+  const file = $('any-file').files?.[0];
+  if (file) uploadImage(file, { asFile: true });
+});
+
+/// Sends an image (D36) or, with asFile, any file under its own name (D42). Both share the
+/// chunked upload, the progress toast, and "a newer pick cancels the older one".
+async function uploadImage(file, { asFile = false } = {}) {
+  const what = asFile ? 'File' : 'Image';
+  if (file.size > (asFile ? FILE_MAX_BYTES : IMAGE_MAX_BYTES)) { toast(`${what} too large (max ${asFile ? 100 : 25} MiB)`); return; }
+  if (file.size === 0) { toast(`The ${what.toLowerCase()} is empty`); return; }
   if (imageUpload) imageUpload.cancelled = true;
   const upload = { cancelled: false };
   imageUpload = upload;
   let bytes;
-  try { bytes = new Uint8Array(await file.arrayBuffer()); } catch { toast('Could not read the image'); return; }
+  try { bytes = new Uint8Array(await file.arrayBuffer()); } catch { toast(`Could not read the ${what.toLowerCase()}`); return; }
   // The page may have been hidden (camera) and be reconnecting: wait until viewing resumes.
   // `view.start` goes out when the video link is ready, and the Mac handles it before chunks.
   const deadline = performance.now() + UPLOAD_CONNECT_WAIT_MS;
@@ -741,15 +758,15 @@ async function uploadImage(file) {
   if (upload.cancelled) return;
   const ws = socket;
   if (!canUpload()) { imageUpload = null; return; }
-  const id = nextUploadId('i');
+  const id = nextUploadId(asFile ? 'f' : 'i');
   upload.sending = true;
-  pendingUploads.set(id, { kind: 'image' });
+  pendingUploads.set(id, { kind: asFile ? 'file' : 'image' });
   const showProgress = bytes.length > 2 * UPLOAD_BUFFER_BYTES;
   const progress = (sent) => {
     if (showProgress) toast(`Uploading… ${Math.max(0, Math.floor((sent / bytes.length) * 100))}%`, { sticky: true });
   };
   progress(0);
-  for (const chunk of imageChunkMessages(id, bytes)) {
+  for (const chunk of (asFile ? fileChunkMessages(id, file.name, bytes) : imageChunkMessages(id, bytes))) {
     // Keep the send buffer small, so input and pings are never stuck behind the image.
     while (ws === socket && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > UPLOAD_BUFFER_BYTES && !upload.cancelled) {
       progress(chunk.offset - ws.bufferedAmount);
@@ -771,19 +788,19 @@ async function uploadImage(file) {
   if (imageUpload === upload) imageUpload = null;
 }
 
-/// `result` or `error` for a clipboard or image request (D36).
+/// `result` or `error` for a clipboard, image, or file request (D36, D42).
 function onUploadReply(msg) {
   const pending = pendingUploads.get(msg.id);
   if (!pending) return;
   pendingUploads.delete(msg.id);
   if (msg.t === 'result') {
-    if (pending.kind === 'image') toast(`Pasted path: ${shortPath(msg.path || '')}`);
+    if (pending.kind === 'image' || pending.kind === 'file') toast(`Pasted path: ${shortPath(msg.path || '')}`);
     else toast(`Pasted ${pending.chars} chars`);
     return;
   }
   switch (msg.code) {
     case 'too_large':
-      toast(pending.kind === 'image' ? 'Image too large (max 25 MiB)' : 'Text too large (max 1 MiB)');
+      toast({ image: 'Image too large (max 25 MiB)', file: 'File too large (max 100 MiB)' }[pending.kind] ?? 'Text too large (max 1 MiB)');
       break;
     case 'unsupported_type':
       toast('Not a supported image (PNG, JPEG, HEIC, GIF, WebP)');
@@ -862,7 +879,7 @@ const keyPanel = new KeyPanel({
   textInput,
   sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
   onLayout: (change) => viewer.keepZoom(change),
-  onAction: (action) => (action === 'paste' ? pasteClipboard() : pickImage()),
+  onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile }[action]?.()),
 });
 
 setListTab(listTab);
