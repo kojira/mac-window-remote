@@ -40,7 +40,7 @@ CODESIGN_IDENTITY="<name of the identity>" scripts/build-app.sh
 
 Development: `MWR_WEB_ROOT=$PWD/web build/MacWindowRemote.app/Contents/MacOS/MacWindowRemote` serves the web client from disk, so client edits need only a reload.
 
-Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer.
+Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer and the quick-switch slots.
 
 The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, BSD-style license in `Contents/Resources/WebRTC-LICENSE`); `scripts/build-app.sh` embeds and signs it.
 

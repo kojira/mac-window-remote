@@ -4,8 +4,6 @@
 import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
 
 const MAX_ZOOM = 8;
-const BAR_HIDE_MS = 3000;
-const TOP_EDGE_PX = 40;
 /// A thumb-sized swipe covers a useful distance of the window (D24).
 const SENSITIVITY = 1.5;
 
@@ -13,19 +11,17 @@ const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
 const clamp1 = (x) => Math.min(Math.max(x, -1), 1);
 
 export class Viewer {
-  constructor({ stage, video, cursor, dragBadge, bar, send, canInput }) {
+  constructor({ stage, video, cursor, dragBadge, send, canInput }) {
     this.stage = stage;
     this.video = video;
     this.cursorEl = cursor;
     this.dragBadge = dragBadge;
-    this.bar = bar;
     this.send = send;
     this.canInput = canInput;
     this.size = null; // {width, height}: the video's intrinsic size, while a frame is shown
     this.scale = 1; // CSS px per video px
     this.tx = 0;
     this.ty = 0;
-    this.barTimer = null;
     this.gestures = new GestureRecognizer();
     this.longPressTimer = null;
     this.nextSeq = 1; // never reset, so a late confirmation cannot match a newer move
@@ -143,14 +139,6 @@ export class Viewer {
     return [...touchList].map((t) => ({ id: t.identifier, x: t.clientX - r.left, y: t.clientY - r.top }));
   }
 
-  // ---------- top bar ----------
-
-  showBar() {
-    this.bar.classList.remove('hidden');
-    clearTimeout(this.barTimer);
-    this.barTimer = setTimeout(() => this.bar.classList.add('hidden'), BAR_HIDE_MS);
-  }
-
   // ---------- gestures (D23) ----------
 
   onTouch(e, phase) {
@@ -186,10 +174,7 @@ export class Viewer {
       switch (i.type) {
         case 'move': this.queueMove(i.dx, i.dy); break;
         case 'scroll': this.queueScroll(i.dx, i.dy); break;
-        case 'click':
-          if (i.y < TOP_EDGE_PX && this.bar.classList.contains('hidden')) { this.showBar(); break; }
-          this.sendInput({ t: 'click' });
-          break;
+        case 'click': this.sendInput({ t: 'click' }); break;
         case 'rightClick': this.sendInput({ t: 'rightClick' }); break;
         case 'dragStart':
           if (!this.size || !this.canInput()) { this.gestures.releaseDragLock(); break; }

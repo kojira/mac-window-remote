@@ -1,10 +1,13 @@
-// State machine, socket, and video link (DESIGN.md D16, D18, D22, D27, D32, §3, §4).
+// State machine, socket, and video link (DESIGN.md D16, D18, D22, D27, D32, D33, §3, §4).
 import { Viewer } from './viewer.js';
 import { VideoLink } from './rtc.js';
 import { TextInput } from './input.js';
+import { SlotBar } from './slotbar.js';
 
-const WINDOW_KEY = 'mwr.windowId';
-const TITLE_KEY = 'mwr.windowTitle';
+/// The viewed window {id, app, title} (D33: slots store the app and title too).
+const WINDOW_KEY = 'mwr.window';
+/// While the viewer is visible, the window list and slot thumbnails refresh this often (D33).
+const THUMBS_REFRESH_MS = 10000;
 const BACKOFF_MS = [500, 1000, 2000, 5000];
 const DEAD_AFTER_MS = 15000;
 
@@ -88,14 +91,15 @@ function renderWindows(items) {
     title.className = 'wtitle';
     title.textContent = w.title || '(untitled)';
     li.append(app, title);
-    li.addEventListener('click', () => openWindow(w.id, `${w.app} — ${w.title || '(untitled)'}`));
+    li.addEventListener('click', () => openWindow(w));
     ul.append(li);
   }
 }
 
 function showList() {
   sessionStorage.removeItem(WINDOW_KEY);
-  sessionStorage.removeItem(TITLE_KEY);
+  slotBar.closeMenu();
+  slotBar.render();
   viewer.clear();
   show('list');
   refreshList();
@@ -119,21 +123,42 @@ $('back').addEventListener('click', () => {
   showList();
 });
 
-function openWindow(id, title) {
-  sessionStorage.setItem(WINDOW_KEY, String(id));
-  sessionStorage.setItem(TITLE_KEY, title);
-  $('viewer-title').textContent = title;
+/// From the list, or a quick-switch slot while viewing (D33): the peer connection stays.
+function openWindow(w) {
+  sessionStorage.setItem(WINDOW_KEY, JSON.stringify({ id: w.id, app: w.app, title: w.title }));
   viewer.clear();
   show('viewer');
-  viewer.showBar();
+  slotBar.render();
   viewMessage('');
-  send({ t: 'view.start', windowId: id });
+  send({ t: 'view.start', windowId: w.id });
+  refreshSlots();
+}
+
+/// The viewed window {id, app, title}, or null.
+function viewingWindow() {
+  try {
+    const w = JSON.parse(sessionStorage.getItem(WINDOW_KEY));
+    return w && Number.isInteger(w.id) ? w : null;
+  } catch { return null; }
 }
 
 function viewingWindowId() {
-  const v = sessionStorage.getItem(WINDOW_KEY);
-  return v ? Number(v) : null;
+  return viewingWindow()?.id ?? null;
 }
+
+// ---------- quick-switch slots (D33) ----------
+
+/// A fresh window list re-resolves the slots; its reply requests the thumbnails.
+function refreshSlots() {
+  if (screen === 'viewer') send({ t: 'windows.list' });
+}
+
+function requestThumbs() {
+  const ids = slotBar.windowIds();
+  if (screen === 'viewer' && ids.length > 0) send({ t: 'thumbs.request', windowIds: ids });
+}
+
+setInterval(() => { if (!document.hidden) refreshSlots(); }, THUMBS_REFRESH_MS);
 
 function overlay(text, { retry = false } = {}) {
   $('viewer-overlay-text').textContent = text || '';
@@ -177,9 +202,6 @@ function connect() {
   authed = false;
   setConnDots('wait');
   if (screen === null || screen === 'denied') show(viewingWindowId() ? 'viewer' : 'list');
-  if (screen === 'viewer') {
-    $('viewer-title').textContent = sessionStorage.getItem(TITLE_KEY) || '';
-  }
   const ws = new WebSocket(wsURL());
   socket = ws;
   ws.onopen = () => armDeadTimer();
@@ -282,6 +304,11 @@ function onMessage(msg) {
       break;
     case 'windows':
       renderWindows(msg.items || []);
+      slotBar.setWindows(msg.items || []);
+      requestThumbs();
+      break;
+    case 'thumb':
+      slotBar.onThumb(msg);
       break;
     case 'view.state':
       onViewState(msg);
@@ -302,6 +329,7 @@ function onVideoReady() {
     viewMessage(permissions.screenRecording ? ''
       : 'Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
     send({ t: 'view.start', windowId: viewingWindowId() });
+    refreshSlots();
   } else {
     show('list');
     listMessage('');
@@ -395,11 +423,18 @@ const viewer = new Viewer({
   video: $('video'),
   cursor: $('cursor'),
   dragBadge: $('drag-badge'),
-  bar: $('viewer-bar'),
   send: sendInput,
   canInput: () => screen === 'viewer' && authed && link.canSend(),
 });
 $('fit').addEventListener('click', () => viewer.fit());
+
+const slotBar = new SlotBar({
+  container: $('slots'),
+  menu: $('slot-menu'),
+  current: () => (screen === 'viewer' ? viewingWindow() : null),
+  onSwitch: (w) => openWindow(w),
+  onChange: requestThumbs,
+});
 
 const textInput = new TextInput({
   field: $('text'),
