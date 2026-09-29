@@ -2073,3 +2073,47 @@ On a real iPhone against the real Mac:
 5. *Unit:* file name sanitizing; unique `<UUID>` subdirectory per upload; file chunks not
    sniffed, 100 MiB limit; cleanup of old subdirectories; `file.chunk` decoding and the
    name only on the first chunk; 📎 File fires on the menu item's touch end.
+
+### D43. ☰ the viewed app's menu bar
+- **Why (user request, Issue #15):** run a menu command of the viewed app (e.g. Format → Font)
+  without reaching the Mac's menu bar, which is outside the captured window.
+- **Entry.** ☰ in the viewer's bottom bar (between 🔊 and ⌨︎; hidden while typing like 🔊). It
+  opens a full-height sheet titled with the app's name, "Loading…" until the Mac replies.
+- **Protocol (`/ws`).** Phone → `{"t":"menu.list"}`; Mac → `{"t":"menu","gen","windowId",
+  "menus","truncated"}`. Rows are `{"sep":true}` or `{"id","title","enabled","mark"?,
+  "shortcut"?,"items"?}`; `mark` is `check`/`mixed`, `id` is the index path (`"3.1.2"`), `gen`
+  numbers the listing. Phone → `{"t":"menu.press","id","gen"}`; Mac → `{"t":"menu.pressed","id"}`
+  or `error` with that `id`: `menu_stale` (not in the last listing of the still-viewed window,
+  or the titles along the path changed), `menu_disabled`, `menu_failed`,
+  `permission_accessibility`, `window_not_found`. A failing list is an `error` without `id`:
+  `menu_unavailable`, `permission_accessibility`, `window_not_found`.
+- **Mac.** Reads the app's `AXMenuBar` (Accessibility) within 3 s, the Apple menu omitted;
+  consecutive/leading/trailing separators dropped; submenus followed 4 levels below a
+  top-level menu, 500 rows at most, else `truncated`. A press re-walks the live menu bar by
+  the path, checks every title along it and that the item is enabled, raises the window as
+  before a click (D25), and `AXPress`es it through the input pipeline.
+- **Sheet.** One level at a time: ‹ back with the parent's title, ✕ and a tap outside close.
+  Rows show ✓/– marks, the title, and the shortcut right-aligned (› for submenus); disabled
+  rows are grey and do nothing; separators are gaps. Tapping an enabled leaf closes the sheet
+  and sends `menu.press`; an error shows the toast "Couldn't run <title>". Leaving the viewer
+  or switching windows closes the sheet; a late listing for another window is ignored.
+- **Limits.** Menus the app fills only when opened (e.g. Open Recent, Window lists in some
+  apps) arrive empty: "Empty (this menu fills in only when opened on the Mac)". Depth and row
+  caps and the 3 s budget cut large menus ("Some items are not shown"). The Apple menu is not
+  offered. Only the menu bar; no context menus or status items.
+- **Source changes:** `AppMenu.swift`, `AXMenuSource.swift`, `Protocol.swift`, `Session.swift`,
+  `MacBackend.swift`, `InputPipeline.swift`; `web/appmenu.js`, `web/app.js`, `web/index.html`,
+  `web/style.css`.
+
+### D43 acceptance criteria
+On a real iPhone against the real Mac:
+1. Viewing TextEdit, ☰ fits in the portrait bottom bar and opens a sheet titled "TextEdit"
+   listing File, Edit, Format, View, Window, Help (no Apple menu).
+2. Format → Font shows submenus with ›, shortcuts right-aligned, disabled items grey,
+   separators, and ✓ on checked items; ‹ goes back a level; ✕ and a tap outside close.
+3. Tapping an enabled item (e.g. Format → Make Plain Text) closes the sheet and runs it in
+   TextEdit; a failing press shows "Couldn't run <title>".
+4. Without Accessibility permission the sheet shows the permission message.
+5. *Unit:* tree building (Apple menu omitted, separators, caps, truncation, shortcuts, marks),
+   title-verified press, `menu.list`/`menu.press` decoding, stale gen/window rejected; web
+   decoding, drill-down, disabled rows, press with `gen`, closing.

@@ -147,6 +147,21 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return .failed(.appNoWindow)
     }
 
+    // MARK: The viewed app's menu bar (D43)
+
+    /// A slow app's menu is cut off after this long; the listing is marked truncated.
+    static let menuReadBudget: Duration = .seconds(3)
+
+    func listMenu(windowId: UInt32) async -> MenuListOutcome {
+        guard Permissions.accessibility else { return .failed(.permissionAccessibility) }
+        guard let pid = pid(for: windowId) else { return .failed(.windowNotFound) }
+        let deadline = ContinuousClock.now + Self.menuReadBudget
+        guard let listing = MenuTree.build(AXMenuSource(pid: pid), expired: { ContinuousClock.now >= deadline }) else {
+            return .failed(.menuUnavailable)
+        }
+        return .listed(listing)
+    }
+
     func viewingChanged(_ window: WindowItem?) {
         lock.lock()
         viewing = window
@@ -230,6 +245,13 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
                 try? await Task.sleep(for: Self.clickAfterRaise)
             }
             await InputInjector.key(name, mods: mods)
+        case .menuPress(let path, let titles):
+            // The app is in front before its menu item runs, as before a click (D25, D43).
+            if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+            if let code = MenuTree.press(AXMenuSource(pid: pid), path: path, titles: titles) {
+                log.info("menu press failed code=\(code.rawValue, privacy: .public)")
+                return code
+            }
         case .paste(let text):
             // The raised window needs to be in front before ⌘V, as before a click (D25).
             if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }

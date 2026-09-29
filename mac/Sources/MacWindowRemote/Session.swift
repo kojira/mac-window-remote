@@ -43,6 +43,8 @@ protocol SessionBackend: Sendable {
     /// Launches or activates an app of the last list and waits up to 10 s for its front
     /// pickable window (D40).
     func openApp(id: String) async -> AppOpenOutcome
+    /// The menu bar of the viewed window's app (D43); pressing goes through `perform`.
+    func listMenu(windowId: UInt32) async -> MenuListOutcome
 }
 
 /// What `openApp` found (D40).
@@ -165,6 +167,11 @@ actor Session {
     private var thumbsTask: Task<Void, Never>?
     /// The pending `app.open` (D40); a newer one, a view change, or teardown cancels it.
     private var appOpenTask: Task<Void, Never>?
+
+    // The viewed app's menu bar (D43): the last listing's number, window, and leaf titles.
+    private var menuGen = 0
+    private var menuWindowId: UInt32?
+    private var menuLeaves: [String: [String]] = [:]
 
     // WebRTC (D22, D27): the one peer connection, numbered by the client.
     private var peer: RTCPeer?
@@ -321,7 +328,67 @@ actor Session {
             await send(.apps(await backend.listApps()))
         case .appOpen(let id):
             openApp(id)
+        case .menuList:
+            await listMenu()
+        case .menuPress(let id, let gen):
+            await pressMenu(id: id, gen: gen)
         }
+    }
+
+    // MARK: The viewed app's menu bar (D43)
+
+    private func listMenu() async {
+        guard let windowId = viewingWindowId, capture != nil else {
+            await send(.error(code: .windowNotFound, message: "Open a window first"))
+            return
+        }
+        switch await backend.listMenu(windowId: windowId) {
+        case .listed(let listing):
+            guard viewingWindowId == windowId, !closed else { return }
+            menuGen += 1
+            menuWindowId = windowId
+            menuLeaves = listing.leafTitles()
+            log.info("menu listed gen=\(self.menuGen, privacy: .public) leaves=\(self.menuLeaves.count, privacy: .public) truncated=\(listing.truncated, privacy: .public)")
+            await send(.menu(gen: menuGen, windowId: windowId, listing: listing))
+        case .failed(let code):
+            let message: String
+            switch code {
+            case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
+            case .windowNotFound: message = "Window not found"
+            default: message = "This app's menu can't be read"
+            }
+            await send(.error(code: code, message: message))
+        }
+    }
+
+    /// Only ids of the last listing for the window still viewed are pressed; the backend checks
+    /// the titles along the path again on the live menu bar.
+    private func pressMenu(id: String, gen: Int) async {
+        guard gen == menuGen, let windowId = viewingWindowId, windowId == menuWindowId,
+              let titles = menuLeaves[id], let path = MenuTree.path(id) else {
+            await sendMenuError(.menuStale, id: id)
+            return
+        }
+        log.info("menu press gen=\(gen, privacy: .public) depth=\(path.count, privacy: .public)")
+        await input.submit(.menuPress(path: path, titles: titles)) { [weak self] code in
+            if let code {
+                await self?.sendMenuError(code, id: id)
+            } else {
+                await self?.send(.menuPressed(id: id))
+            }
+        }
+    }
+
+    private func sendMenuError(_ code: ErrorCode, id: String) async {
+        let message: String
+        switch code {
+        case .menuStale: message = "The menu changed; open it again"
+        case .menuDisabled: message = "That item is disabled"
+        case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
+        case .windowNotFound: message = "Window not found"
+        default: message = "Couldn't run the menu item"
+        }
+        await send(.error(code: code, message: message, id: id))
     }
 
     // MARK: App launcher (D40)

@@ -37,6 +37,7 @@ private final class PasteRecordingBackend: SessionBackend, @unchecked Sendable {
     func listApps() async -> [AppItem] { [] }
     func appIcon(id: String) async -> Data? { nil }
     func openApp(id: String) async -> AppOpenOutcome { .failed(.appNotFound) }
+    func listMenu(windowId: UInt32) async -> MenuListOutcome { .failed(.menuUnavailable) }
 }
 
 /// D36 through the real server and session: chunks are assembled, saved in the uploads
