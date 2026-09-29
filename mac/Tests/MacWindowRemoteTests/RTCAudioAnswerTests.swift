@@ -45,5 +45,11 @@ import WebRTC
         #expect(audio.lowercased().contains("opus/48000"))
         let video = try #require(answer.components(separatedBy: "m=").first { $0.hasPrefix("video") })
         #expect(video.contains("a=sendonly") && video.contains("H264"))
+        // A rebuilt tap notifies the ADM on its own thread; this must return, and a chunk while
+        // WebRTC is not recording (not connected) is dropped.
+        host.audioDevice.inputThreadWillChange()
+        #expect(!host.audioDevice.isRecording && !host.audioDevice.isPlaying)
+        let silence = [Int16](repeating: 0, count: AudioChunker.chunkFrames)
+        silence.withUnsafeBufferPointer { host.audioDevice.deliver($0.baseAddress!) }
     }
 }
