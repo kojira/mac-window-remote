@@ -4,7 +4,8 @@ Status: **Slice 1 implemented, then replaced by revision 2 (§11: WebRTC video a
 trackpad-style input), which is implemented and awaits acceptance on a real iPhone.
 §12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
-D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.** Sections marked *Superseded by §11* describe
+D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
+§16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -1330,6 +1331,7 @@ On a real iPhone against the real Mac:
 
 ### D34. A 2×6 key panel toggled by ⌨︎
 > *Amended by §16 D36:* the normal layer has a third row, 📋 Paste and 🖼 Image.
+> *Amended by §17 D37:* that third row starts with ⌘F1 and ⌘Tab.
 - **Why (user request, with a reference image):** the iOS keyboard cannot type Esc, Tab,
   arrows, F-keys, or ⌘/⌃/⌥ shortcuts such as ⌘C, ⌘V, and ⌃C. The panel gives those keys
   large targets. Custom buttons (D13) are not part of this step.
@@ -1521,6 +1523,7 @@ On a real iPhone against the real Mac:
 ## 16. Paste the iPhone clipboard or an image into the window (user decision; amends D11, D12)
 
 ### D36. 📋 Paste and 🖼 Image in the key panel
+> *Amended by §17 D37:* the third row is ⌘F1, ⌘Tab, 📋 Paste, 🖼 Image, two columns each.
 - **Why (user request):** "paste the iPhone clipboard contents into the text" and "upload an
   image and paste its path". Slices 2 and 3 (D11, D12) are implemented in the current
   architecture (§11–§15), with one default action: the content lands in the focused field of
@@ -1629,3 +1632,42 @@ On a real iPhone against the real Mac:
    directory, subdirectories and links skipped); binary message decoding (framing, header,
    id, 1 MiB clipboard limit, chunk bounds); `result` encoding; phone-side framing, 1 MiB
    UTF-8 limit, and chunk coverage.
+
+## 17. One-tap ⌘F1 and ⌘Tab (user decision; amends D34, D36)
+
+### D37. Combo keys ⌘F1 and ⌘Tab in the key panel's third row
+- **Why (user request):** one tap for ⌘F1 and ⌘Tab instead of ⌘ then fn then F1 or ⌘ then tab.
+  This is not the general custom-button editor (D13); the two keys are fixed.
+- **Placement (amends D36).** The normal layer's third row is four keys of two columns each:
+  **⌘F1**, **⌘Tab**, **📋 Paste**, **🖼 Image**. Rows one and two, the fn layer, and the
+  panel height are unchanged.
+- **Behavior.** A combo key acts like any other panel key (D34): it sends on press, shows the
+  pressed highlight, never takes focus, and does not auto-repeat. It sends the existing `key`
+  message with its own modifier added to the active ones: `{"t":"key","key":"F1","mods":["cmd"]}`
+  and `{"t":"key","key":"Tab","mods":["cmd"]}`. Active modifiers are merged, each once, in
+  the order cmd, ctrl, opt, shift (armed ⇧ then ⌘Tab sends `["cmd","shift"]`; a locked ⌘
+  does not repeat `cmd`). Armed modifiers then disarm; locked ones stay.
+- **Mac side: unchanged.** The D34 combo posting (`.hidSystemState` source, `.cghidEventTap`)
+  posts ⌘ down (a `flagsChanged` with the command flag), Tab down and up with the command
+  flag, then ⌘ up. Events posted at the HID tap pass through the window server like hardware
+  input, so system hot keys such as ⌘Tab act. A ⌘Tab whose ⌘ is released at once is a quick
+  switch: the app switcher does not stay on screen, and the most recently used other app
+  comes to the front. Holding ⌘ to step through the switcher is not possible (each tap is one
+  full combo).
+  - The phone keeps showing the viewed window (the stream follows the window, not the front
+    app), and the next input raises the viewed window again (D25). So ⌘Tab's effect is seen
+    on the Mac screen, not on the phone, unless the viewed window is the one brought forward.
+- **Source changes:** `web/modifiers.js` (`mergeMods`), `web/keypanel.js` (two keys and the
+  merge), `web/style.css` (four keys per row).
+
+### D37 acceptance criteria
+On a real iPhone against the real Mac:
+1. The normal layer's third row shows ⌘F1, ⌘Tab, 📋 Paste, 🖼 Image with legible labels in
+   portrait and landscape; the fn layer is unchanged; the panel height is unchanged.
+2. ⌘Tab brings the most recently used other app to the front on the Mac.
+3. ⌘F1 sends ⌘F1 (e.g. with the default macOS shortcut, mirror displays toggles if a second
+   display is attached, or the app's own ⌘F1 action fires).
+4. ⇧ then ⌘Tab sends ⌘⇧Tab, and ⇧ disarms; a locked ⌘ stays locked after ⌘Tab.
+5. Holding ⌘Tab sends it once (no repeat); the key highlights while pressed.
+6. 📋 Paste and 🖼 Image still work as in D36.
+7. *Unit:* merging a combo key's mods with armed and locked modifiers.
