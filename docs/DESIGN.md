@@ -1472,7 +1472,9 @@ On a real iPhone against the real Mac:
   `<video>` intrinsic size changes. On a `window.fit` reply for the viewed window the
   phone fits the view (zoom 1) and fits again at the next intrinsic size change, so the
   resized window fills the stage.
-- **Phone error toasts:** `window_not_resizable` "This window can't be resized";
+- **Phone toasts:** a `window.fit` with `clamped: true` shows "The app limits this
+  window's size" (fitted) or "The app limited the restored size" (restored);
+  `window_not_resizable` "This window can't be resized";
   `window_fullscreen` "Full-screen windows can't be resized"; `window_not_fitted` clears
   the button's state (the Mac forgot, e.g. after it restarted) and shows "Window size was
   already restored".

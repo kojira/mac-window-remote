@@ -51,6 +51,7 @@ function show(name) {
   screen = name;
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
   if (name !== 'viewer') { keyPanel.close(); textInput.blur(); }
+  renderFitWindow();
 }
 
 function setConnDots(state) {
@@ -131,9 +132,46 @@ function openWindow(w) {
   viewer.clear();
   show('viewer');
   slotBar.render();
+  renderFitWindow();
   viewMessage('');
   send({ t: 'view.start', windowId: w.id });
   refreshSlots();
+}
+
+// ---------- fit the Mac window to the phone (D35) ----------
+
+/// windowId → true while the Mac window is fitted; in memory only.
+const fittedWindows = new Map();
+
+function renderFitWindow() {
+  const b = $('fit-window');
+  const on = fittedWindows.get(viewingWindowId()) === true;
+  b.classList.toggle('active', on);
+  b.setAttribute('aria-pressed', String(on));
+  b.setAttribute('aria-label', on ? 'Restore window size' : 'Fit window to phone');
+}
+
+$('fit-window').addEventListener('click', () => {
+  const id = viewingWindowId();
+  if (id == null) return;
+  if (fittedWindows.get(id)) {
+    link.send({ t: 'window.restore' });
+    return;
+  }
+  // The visible video area: above the bottom bar and the key panel, inside the safe area.
+  const stage = $('stage');
+  if (!stage.clientWidth || !stage.clientHeight) return;
+  link.send({ t: 'window.fitPhone', aspect: stage.clientWidth / stage.clientHeight });
+});
+
+function onWindowFit(msg) {
+  if (!Number.isInteger(msg.windowId)) return;
+  if (msg.state === 'fitted') fittedWindows.set(msg.windowId, true);
+  else fittedWindows.delete(msg.windowId);
+  if (msg.windowId !== viewingWindowId()) return;
+  renderFitWindow();
+  viewer.fitResized();
+  if (msg.clamped) toast(msg.state === 'fitted' ? 'The app limits this window\'s size' : 'The app limited the restored size');
 }
 
 /// The viewed window {id, app, title}, or null.
@@ -345,6 +383,9 @@ function onControl(msg) {
     case 'cursor':
       viewer.onCursor(msg);
       break;
+    case 'window.fit':
+      onWindowFit(msg);
+      break;
     case 'error':
       onError(msg);
       break;
@@ -385,6 +426,12 @@ function onError(msg) {
       return;
     case 'rtc_failed':
       link.fail();
+      return;
+    case 'window_not_fitted':
+      // The Mac no longer has the original frame (e.g. it restarted): forget ours too.
+      fittedWindows.delete(viewingWindowId());
+      renderFitWindow();
+      toast(msg.message || 'Window size was already restored');
       return;
     default:
       toast(msg.message || msg.code);

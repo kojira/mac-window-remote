@@ -64,10 +64,11 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .slot.unavailable { opacity: 0.35; }
 .slot.current { border-color: #0a84ff; }
 /* While typing, the text field takes the place of the slots and Fit (D33). */
-#bottom-bar.typing #slots, #bottom-bar.typing #fit { display: none; }
+#bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window { display: none; }
 #text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; padding: 8px 0; border-width: 0; }
 #bottom-bar.typing #text { flex: 1; opacity: 1; padding: 8px 10px; border-width: 1px; }
-#keyboard.active { background: #0a84ff; }
+#keyboard.active, #fit-window.active { background: #0a84ff; }
+#fit-window { width: 44px; padding: 0; font-size: 20px; }
 
 /* D34: the key panel sits above the bottom bar; the stage ends at its top edge. */
 #viewer { --key-h: 50px; --panel-rows: 2; --panel-h: calc(var(--panel-rows) * (var(--key-h) + 6px) + 6px); }
