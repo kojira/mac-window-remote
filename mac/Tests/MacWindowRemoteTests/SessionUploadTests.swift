@@ -34,6 +34,9 @@ private final class PasteRecordingBackend: SessionBackend, @unchecked Sendable {
     func windowAfterSwitch(from windowId: UInt32) async -> WindowItem? { nil }
     func makePeer() -> RTCPeer? { nil }
     func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool { true }
+    func listApps() async -> [AppItem] { [] }
+    func appIcon(id: String) async -> Data? { nil }
+    func openApp(id: String) async -> AppOpenOutcome { .failed(.appNotFound) }
 }
 
 /// D36 through the real server and session: chunks are assembled, saved in the uploads

@@ -26,6 +26,9 @@ private final class FakeBackend: SessionBackend {
     func windowAfterSwitch(from windowId: UInt32) async -> WindowItem? { nil }
     func makePeer() -> RTCPeer? { nil }
     func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool { true }
+    func listApps() async -> [AppItem] { [] }
+    func appIcon(id: String) async -> Data? { nil }
+    func openApp(id: String) async -> AppOpenOutcome { .failed(.appNotFound) }
 }
 
 /// The Tailscale identity check through the real server (D32): only the owner's

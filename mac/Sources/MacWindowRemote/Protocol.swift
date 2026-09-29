@@ -30,6 +30,12 @@ enum ErrorCode: String, Codable {
     /// D39: the tap yields only silence while a tapped app plays, which is what a missing
     /// System Audio Recording grant looks like.
     case permissionAudioCapture = "permission_audio_capture"
+    /// D40: `app.open` with an id that is not in the last app list.
+    case appNotFound = "app_not_found"
+    /// D40: the app could not be launched or activated.
+    case appLaunchFailed = "app_launch_failed"
+    /// D40: no window of the opened app appeared within 10 s.
+    case appNoWindow = "app_no_window"
     case `internal` = "internal"
 }
 
@@ -61,6 +67,10 @@ enum ClientMessage: Equatable {
     case windowRestore
     /// Play Mac audio on the phone: off, the viewed window's app, or the whole Mac (D39).
     case audio(mode: AudioMode)
+    /// The Apps tab list (D40).
+    case appsList
+    /// Launch or activate an app of the last list and view its front window (D40).
+    case appOpen(id: String)
 }
 
 /// What Mac audio goes to the phone (D39). Not persisted on the Mac; the phone re-sends it.
@@ -108,6 +118,7 @@ extension ClientMessage {
         let mods: [String]?
         let aspect: Double?
         let mode: String?
+        let id: String?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -195,6 +206,12 @@ extension ClientMessage {
                 throw ProtocolError.invalidValue("mode")
             }
             return .audio(mode: mode)
+        case "apps.list":
+            return .appsList
+        case "app.open":
+            let id = try require(e.id, "id")
+            guard !id.isEmpty, id.count <= 64 else { throw ProtocolError.invalidValue("id") }
+            return .appOpen(id: id)
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -206,7 +223,7 @@ extension ClientMessage {
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce: return .socket
+        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen: return .socket
         case .move, .scroll: return .motion
         case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
         }
@@ -230,6 +247,8 @@ extension ClientMessage {
         case .windowFitPhone: return "window.fitPhone"
         case .windowRestore: return "window.restore"
         case .audio: return "audio"
+        case .appsList: return "apps.list"
+        case .appOpen: return "app.open"
         }
     }
 }
@@ -342,6 +361,8 @@ enum ServerMessage {
     case viewSwitched(windowId: UInt32, app: String, title: String)
     /// The audio mode the Mac applies (D39): the echo of `audio`, or `off` after a failure.
     case audioState(mode: AudioMode)
+    /// The Apps tab list (D40).
+    case apps([AppItem])
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -358,6 +379,7 @@ enum ServerMessage {
         let t = "window.fit"; let windowId: UInt32; let state: WindowFitState; let clamped: Bool
     }
     private struct Switched: Encodable { let t = "view.switched"; let windowId: UInt32; let app: String; let title: String }
+    private struct Apps: Encodable { let t = "apps"; let items: [AppItem] }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
@@ -403,6 +425,8 @@ enum ServerMessage {
             data = try? encoder.encode(Switched(windowId: id, app: app, title: title))
         case .audioState(let mode):
             data = try? encoder.encode(Audio(mode: mode))
+        case .apps(let items):
+            data = try? encoder.encode(Apps(items: items))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

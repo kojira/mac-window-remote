@@ -36,6 +36,19 @@ protocol SessionBackend: Sendable {
     /// Starts, retargets, or (nil) stops the Mac audio tap (D39). False if this Mac cannot tap
     /// audio (macOS before 14.2).
     func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool
+    /// The Apps tab list; it becomes the allowlist for `openApp` and `appIcon` (D40).
+    func listApps() async -> [AppItem]
+    /// The PNG icon of an app in the last list, or nil for an unknown id (D40).
+    func appIcon(id: String) async -> Data?
+    /// Launches or activates an app of the last list and waits up to 10 s for its front
+    /// pickable window (D40).
+    func openApp(id: String) async -> AppOpenOutcome
+}
+
+/// What `openApp` found (D40).
+enum AppOpenOutcome: Equatable, Sendable {
+    case window(WindowItem)
+    case failed(ErrorCode)
 }
 
 enum CaptureEvent: Sendable {
@@ -150,6 +163,8 @@ actor Session {
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
     private var thumbsTask: Task<Void, Never>?
+    /// The pending `app.open` (D40); a newer one, a view change, or teardown cancels it.
+    private var appOpenTask: Task<Void, Never>?
 
     // WebRTC (D22, D27): the one peer connection, numbered by the client.
     private var peer: RTCPeer?
@@ -253,10 +268,12 @@ actor Session {
                 await send(.error(code: .internal, message: "Could not list windows"))
             }
         case .viewStart(let windowId):
+            appOpenTask?.cancel()
             await startViewing(windowId)
         case .thumbsRequest(let windowIds):
             sendThumbnails(windowIds)
         case .viewStop:
+            appOpenTask?.cancel()
             stopViewing()
             if let id = viewingWindowId { await send(.viewState(windowId: id, state: .stopped, reason: nil)) }
             viewingWindowId = nil
@@ -300,6 +317,41 @@ actor Session {
             audioMode = mode
             log.info("audio mode=\(mode.rawValue, privacy: .public)")
             await sendControl(.audioState(mode: mode))
+        case .appsList:
+            await send(.apps(await backend.listApps()))
+        case .appOpen(let id):
+            openApp(id)
+        }
+    }
+
+    // MARK: App launcher (D40)
+
+    /// Launches or activates the app, then views its front window the way ⌘Tab does (D38).
+    private func openApp(_ id: String) {
+        appOpenTask?.cancel()
+        let backend = self.backend
+        appOpenTask = Task { [weak self] in
+            let outcome = await backend.openApp(id: id)
+            guard !Task.isCancelled else { return }
+            await self?.appOpened(id: id, outcome)
+        }
+    }
+
+    private func appOpened(id: String, _ outcome: AppOpenOutcome) async {
+        guard !closed else { return }
+        switch outcome {
+        case .window(let window):
+            log.info("app opened, viewing id=\(window.id, privacy: .public)")
+            await send(.viewSwitched(windowId: window.id, app: window.app, title: window.title))
+            await startViewing(window.id)
+        case .failed(let code):
+            let message: String
+            switch code {
+            case .appNotFound: message = "App not found; refresh the list"
+            case .appNoWindow: message = "The app has no window"
+            default: message = "Could not open the app"
+            }
+            await send(.error(code: code, message: message, id: id))
         }
     }
 
@@ -623,6 +675,7 @@ actor Session {
         viewingWindowId = nil
         pingTask?.cancel()
         thumbsTask?.cancel()
+        appOpenTask?.cancel()
         // Replacing or ending the session also closes its peer connection (D22).
         closePeer()
         await input.shutdown()

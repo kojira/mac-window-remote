@@ -26,6 +26,17 @@ enum Server {
             router.middlewares.add(
                 FileMiddleware(webRoot, cacheControl: .init([(MediaType(type: .any), [.noCache])]), searchForIndexHtml: true, logger: logger))
         }
+        // D40: icons of the Apps tab, only for ids of the list the Mac produced last.
+        router.get("/apps/icon/:file") { _, context -> Response in
+            let file = context.parameters.get("file") ?? ""
+            guard file.hasSuffix(".png"), let png = await hub.backend.appIcon(id: String(file.dropLast(4))) else {
+                return Response(status: .notFound)
+            }
+            return Response(
+                status: .ok,
+                headers: [.contentType: "image/png", .cacheControl: "private, max-age=86400"],
+                body: .init(byteBuffer: ByteBuffer(bytes: png)))
+        }
         router.ws("/ws") { _, _ in
             .upgrade([:])
         } onUpgrade: { inbound, outbound, context in

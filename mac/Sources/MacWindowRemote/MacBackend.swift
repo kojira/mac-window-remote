@@ -104,6 +104,49 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return nil
     }
 
+    // MARK: App launcher (D40)
+
+    private let apps = AppCatalog()
+
+    func listApps() async -> [AppItem] {
+        await MainActor.run { apps.list() }
+    }
+
+    func appIcon(id: String) async -> Data? {
+        await MainActor.run { apps.icon(for: id) }
+    }
+
+    /// How long `openApp` waits for the app's window, and how often it looks (D40).
+    static let appWindowTimeout: Duration = .seconds(10)
+    static let appWindowPoll: Duration = .milliseconds(250)
+
+    func openApp(id: String) async -> AppOpenOutcome {
+        // Only bundles from the list this Mac produced are ever opened.
+        guard let url = apps.url(for: id) else { return .failed(.appNotFound) }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        let pid: pid_t
+        do {
+            pid = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
+        } catch {
+            log.error("app open failed: \(String(describing: error), privacy: .public)")
+            return .failed(.appLaunchFailed)
+        }
+        log.info("app opened pid=\(pid, privacy: .public)")
+        let deadline = ContinuousClock.now + Self.appWindowTimeout
+        while ContinuousClock.now < deadline, !Task.isCancelled {
+            let windows = (try? await WindowCatalog.shareableWindows()) ?? []
+            let pickable = Set(windows.map(\.windowID))
+            if let windowId = WindowCatalog.frontWindowId(of: pid, order: WindowCatalog.onScreenOrder(), pickable: pickable),
+               let window = windows.first(where: { $0.windowID == windowId }) {
+                return .window(WindowCatalog.item(for: window))
+            }
+            try? await Task.sleep(for: Self.appWindowPoll)
+        }
+        log.info("app open found no window")
+        return .failed(.appNoWindow)
+    }
+
     func viewingChanged(_ window: WindowItem?) {
         lock.lock()
         viewing = window
