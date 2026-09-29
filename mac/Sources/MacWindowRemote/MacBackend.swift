@@ -68,6 +68,33 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return await resizer.restore(windowId: windowId, pid: pid)
     }
 
+    /// How long the view waits for ⌘Tab to bring another app forward, and how often it checks (D38).
+    static let appSwitchTimeout: Duration = .seconds(1)
+    static let appSwitchPoll: Duration = .milliseconds(25)
+
+    func windowAfterAppSwitch(from windowId: UInt32) async -> WindowItem? {
+        guard let viewedPid = pid(for: windowId) else { return nil }
+        let deadline = ContinuousClock.now + Self.appSwitchTimeout
+        var front: pid_t?
+        while ContinuousClock.now < deadline {
+            let pid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+            if let pid, pid != viewedPid { front = pid; break }
+            try? await Task.sleep(for: Self.appSwitchPoll)
+        }
+        guard let front else {
+            log.info("app switch not followed reason=timeout")
+            return nil
+        }
+        let windows = (try? await WindowCatalog.shareableWindows()) ?? []
+        let pickable = Set(windows.map(\.windowID))
+        guard let id = WindowCatalog.frontWindowId(of: front, order: WindowCatalog.onScreenOrder(), pickable: pickable),
+              let window = windows.first(where: { $0.windowID == id }) else {
+            log.info("app switch not followed reason=no_window")
+            return nil
+        }
+        return WindowCatalog.item(for: window)
+    }
+
     func viewingChanged(_ window: WindowItem?) {
         lock.lock()
         viewing = window
@@ -145,6 +172,11 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         case .text(let text):
             await InputInjector.type(text)
         case .key(let name, let mods):
+            // ⌘Tab switches away from the front app, so the raised window must be in front
+            // first, as before a click (D38).
+            if focus == .raised, InputAction.Kind.isAppSwitch(name, mods) {
+                try? await Task.sleep(for: Self.clickAfterRaise)
+            }
             await InputInjector.key(name, mods: mods)
         case .paste(let text):
             // The raised window needs to be in front before ⌘V, as before a click (D25).

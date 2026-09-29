@@ -249,6 +249,11 @@ extension DiscreteInput {
 }
 
 extension InputAction.Kind {
+    /// ⌘Tab or ⌘⇧Tab: the app switcher (D37, D38).
+    static func isAppSwitch(_ name: String, _ mods: [KeyModifier]) -> Bool {
+        name == "Tab" && mods.contains(.cmd)
+    }
+
     /// Log label; never includes typed text.
     var logName: String {
         switch self {

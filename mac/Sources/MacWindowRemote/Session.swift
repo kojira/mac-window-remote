@@ -25,6 +25,9 @@ protocol SessionBackend: Sendable {
     func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome
     /// Puts the window back to its frame before the first fit (D35).
     func restoreWindow(windowId: UInt32) async -> WindowFitOutcome
+    /// After ⌘Tab (D38): waits up to about a second for an app other than the viewed window's
+    /// to come to the front and returns that app's frontmost pickable window, or nil.
+    func windowAfterAppSwitch(from windowId: UInt32) async -> WindowItem?
     /// Called when capture starts or stops (display assertion, menu bar state).
     func viewingChanged(_ window: WindowItem?)
     /// A new answering peer connection that sends the capture track (D22), or nil if WebRTC is
@@ -265,12 +268,36 @@ actor Session {
         case .text(let text):
             await input.submit(.text(text))
         case .key(let name, let mods):
-            await input.submit(.key(name, mods: mods))
+            if InputAction.Kind.isAppSwitch(name, mods), let windowId = viewingWindowId {
+                // The viewer follows the app that ⌘Tab brings forward (D38).
+                await input.submit(.key(name, mods: mods)) { [weak self] code in
+                    if let code {
+                        await self?.reportInputError(code)
+                    } else {
+                        Task { await self?.followAppSwitch(from: windowId) }
+                    }
+                }
+            } else {
+                await input.submit(.key(name, mods: mods))
+            }
         case .windowFitPhone(let aspect):
             await resizeViewedWindow { backend, id in await backend.fitWindow(windowId: id, aspect: aspect) }
         case .windowRestore:
             await resizeViewedWindow { backend, id in await backend.restoreWindow(windowId: id) }
         }
+    }
+
+    // MARK: Follow ⌘Tab (D38)
+
+    /// Switches the view to the front app's window, the same way as `view.start` (no
+    /// renegotiation), and tells the phone first. Nothing happens if the user switched
+    /// windows meanwhile or no window came forward.
+    private func followAppSwitch(from windowId: UInt32) async {
+        guard let window = await backend.windowAfterAppSwitch(from: windowId),
+              viewingWindowId == windowId, capture != nil, !closed, window.id != windowId else { return }
+        log.info("view follows app switch id=\(window.id, privacy: .public)")
+        await send(.viewSwitched(windowId: window.id, app: window.app, title: window.title))
+        await startViewing(window.id)
     }
 
     // MARK: Clipboard text and images (D36)
