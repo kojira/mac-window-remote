@@ -14,12 +14,16 @@ struct InputAction: Sendable {
         case dragEnd
         case text(String)
         case key(String, mods: [KeyModifier])
+        /// Put the text on the Mac clipboard, then ⌘V into the window (D36).
+        case paste(String)
     }
     let windowId: UInt32
     let cursor: CursorState
     let kind: Kind
     /// When the message arrived, to log queueing plus posting latency.
     var received = ContinuousClock.now
+    /// Receives the outcome instead of the pipeline's `onError` (a paste's reply, D36).
+    var reply: (@Sendable (ErrorCode?) async -> Void)?
 }
 
 /// Discrete inputs that `InputPipeline.submit` accepts.
@@ -27,6 +31,7 @@ enum DiscreteInput: Sendable {
     case click, rightClick, dragStart, dragEnd
     case text(String)
     case key(String, mods: [KeyModifier])
+    case paste(String)
 }
 
 /// The input actor (D24, D25). It owns the cursor for the viewed window, coalesces moves and
@@ -74,6 +79,7 @@ actor InputPipeline {
     /// window puts the cursor at its center and brings it to the front once (D25).
     func setTarget(_ windowId: UInt32?) async {
         if windowId != target {
+            for action in discrete { if let reply = action.reply { Task { await reply(.windowNotFound) } } }
             discrete.removeAll()
             pendingScroll = nil
             motionDirty = false
@@ -101,9 +107,11 @@ actor InputPipeline {
         scheduleMotion()
     }
 
-    func submit(_ input: DiscreteInput) {
+    /// `reply`, if given, receives the outcome of this input instead of `onError`.
+    func submit(_ input: DiscreteInput, reply: (@Sendable (ErrorCode?) async -> Void)? = nil) {
         guard let target, !closed else {
             log.info("input dropped kind=\(input.logName, privacy: .public) reason=not_viewing")
+            if let reply { Task { await reply(.windowNotFound) } }
             return
         }
         let kind: InputAction.Kind
@@ -114,8 +122,9 @@ actor InputPipeline {
         case .dragEnd: kind = .dragEnd
         case .text(let text): kind = .text(text)
         case .key(let name, let mods): kind = .key(name, mods: mods)
+        case .paste(let text): kind = .paste(text)
         }
-        discrete.append(InputAction(windowId: target, cursor: cursor, kind: kind))
+        discrete.append(InputAction(windowId: target, cursor: cursor, kind: kind, reply: reply))
         guard discreteTask == nil else { return }
         discreteTask = Task { await self.runDiscrete() }
     }
@@ -183,7 +192,10 @@ actor InputPipeline {
             // Motion that arrived earlier is posted first. It is drained here rather than
             // awaited, so continuous finger movement cannot hold a click back.
             if motionDirty || pendingScroll != nil { _ = await drainMotionOnce() }
-            if let code = await backend.perform(action) {
+            let code = await backend.perform(action)
+            if let reply = action.reply {
+                await reply(code)
+            } else if let code {
                 await onError(code)
             }
             // A click posted at an older cursor leaves the pointer there; move it back to the
@@ -231,6 +243,7 @@ extension DiscreteInput {
         case .dragEnd: return "drag.end"
         case .text: return "text"
         case .key: return "key"
+        case .paste: return "paste"
         }
     }
 }
@@ -247,6 +260,7 @@ extension InputAction.Kind {
         case .dragEnd: return "drag.end"
         case .text: return "text"
         case .key: return "key"
+        case .paste: return "paste"
         }
     }
 }

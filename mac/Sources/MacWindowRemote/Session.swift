@@ -59,12 +59,14 @@ actor SessionHub {
     private var active: Session?
     let backend: any SessionBackend
     let owner: OwnerLogin
+    let uploads: UploadStore
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
-    init(owner: OwnerLogin, backend: any SessionBackend,
+    init(owner: OwnerLogin, backend: any SessionBackend, uploads: UploadStore = .standard,
          onStatus: @escaping @Sendable (ConnectionStatus) -> Void = { _ in }) {
         self.owner = owner
         self.backend = backend
+        self.uploads = uploads
         self.onStatus = onStatus
     }
 
@@ -109,7 +111,7 @@ actor SessionHub {
             return
         }
         var iterator = inbound.messages(maxSize: Server.maxMessageSize).makeAsyncIterator()
-        let session = Session(hub: self, backend: backend, outbound: outbound)
+        let session = Session(hub: self, backend: backend, outbound: outbound, uploads: uploads)
         await activate(session)
         log.info("session started")
         await session.send(.hello(permissions: backend.permissions()))
@@ -147,13 +149,18 @@ actor Session {
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
 
+    // Image uploads (D36).
+    private let uploads: UploadStore
+    private var images = ImageUploadAssembler()
+
     static let captureRetryInterval: Duration = .seconds(5)
     static let pingInterval: Duration = .seconds(10)
 
-    init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter) {
+    init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter, uploads: UploadStore) {
         self.hub = hub
         self.backend = backend
         self.outbound = outbound
+        self.uploads = uploads
         let ref = WeakSession()
         input = InputPipeline(
             backend: backend,
@@ -176,9 +183,8 @@ actor Session {
                     log.info("bad request: \(String(describing: error), privacy: .public)")
                     await send(.error(code: .badRequest, message: "Bad request"))
                 }
-            case .binary:
-                // Image upload arrives in slice 3.
-                await send(.error(code: .badRequest, message: "Binary messages are not supported"))
+            case .binary(let buffer):
+                await binaryMessage(Data(buffer: buffer))
             }
         }
     }
@@ -265,6 +271,75 @@ actor Session {
         case .windowRestore:
             await resizeViewedWindow { backend, id in await backend.restoreWindow(windowId: id) }
         }
+    }
+
+    // MARK: Clipboard text and images (D36)
+
+    private func binaryMessage(_ data: Data) async {
+        let message: BinaryClientMessage
+        do {
+            message = try BinaryClientMessage.decode(data)
+        } catch let rejection as UploadRejection {
+            await sendUploadError(rejection.code, id: rejection.id)
+            return
+        } catch {
+            log.info("bad binary request: \(String(describing: error), privacy: .public)")
+            await send(.error(code: .badRequest, message: "Bad request"))
+            return
+        }
+        switch message {
+        case .clipboardPaste(let id, let text):
+            log.info("clipboard paste received bytes=\(text.utf8.count, privacy: .public)")
+            await pasteIntoViewedWindow(text, id: id, path: nil)
+        case .imageChunk(let id, let size, let offset, let bytes):
+            if offset == 0, viewingWindowId == nil {
+                images.reject(id: id)
+                await sendUploadError(.windowNotFound, id: id)
+                return
+            }
+            switch images.receive(id: id, size: size, offset: offset, bytes: bytes) {
+            case .needMore, .ignored:
+                break
+            case .failed(let code):
+                await sendUploadError(code, id: id)
+            case .complete(let image, let type):
+                let url: URL
+                do {
+                    url = try uploads.save(image, type: type)
+                } catch {
+                    log.error("image save failed: \(String(describing: error), privacy: .public)")
+                    await sendUploadError(.internal, id: id)
+                    return
+                }
+                log.info("image saved type=\(type.rawValue, privacy: .public) bytes=\(image.count, privacy: .public)")
+                await pasteIntoViewedWindow(url.path, id: id, path: url.path)
+            }
+        }
+    }
+
+    /// Sets the Mac clipboard and sends ⌘V to the viewed window through the ordered input
+    /// pipeline (D25), then replies `result` or `error` with the request id.
+    private func pasteIntoViewedWindow(_ text: String, id: String, path: String?) async {
+        await input.submit(.paste(text)) { [weak self] code in
+            if let code {
+                await self?.sendUploadError(code, id: id)
+            } else {
+                await self?.send(.result(id: id, path: path))
+            }
+        }
+    }
+
+    private func sendUploadError(_ code: ErrorCode, id: String) async {
+        let message: String
+        switch code {
+        case .tooLarge: message = "Too large"
+        case .unsupportedType: message = "Not a supported image (PNG, JPEG, HEIC, GIF, WebP)"
+        case .windowNotFound: message = "Open a window first"
+        case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
+        case .badRequest: message = "Bad request"
+        default: message = "Could not save the image"
+        }
+        await send(.error(code: code, message: message, id: id))
     }
 
     // MARK: Fit window to the phone (D35)
