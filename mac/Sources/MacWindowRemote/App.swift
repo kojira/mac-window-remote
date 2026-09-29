@@ -39,7 +39,9 @@ final class AppState: ObservableObject {
 
     private var hub: SessionHub?
     private var serverTask: Task<Void, Never>?
-    private var pollTimer: Timer?
+    /// Re-checks permissions while the Setup & Permissions window is open (D16).
+    private var setupPermissionTimer: Timer?
+    private var menuObserver: NSObjectProtocol?
     private var uploadCleanupTimer: Timer?
     private let windows = WindowPresenter()
 
@@ -62,13 +64,17 @@ final class AppState: ObservableObject {
         RTCHost.initialize()
         let backend = MacBackend(rtc: RTCHost(), onViewing: { _ in })
         hub = SessionHub(owner: owner, backend: backend, onStatus: { status in
-            Task { @MainActor in AppState.shared.connection = status }
+            Task { @MainActor in AppState.shared.connectionChanged(status) }
         })
         startServer()
         startUploadCleanup()
         refreshAllowedLogin()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
-            Task { @MainActor in AppState.shared.refreshPermissions() }
+        // Permissions are checked at launch (`permissions` initial value), when a phone session
+        // starts, when a menu opens, and while the Setup window is open — no constant poll (D16).
+        menuObserver = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { AppState.shared.refreshPermissions() }
         }
         let firstLaunchKey = "setupShown"
         if !permissionsOK || !UserDefaults.standard.bool(forKey: firstLaunchKey) {
@@ -87,6 +93,13 @@ final class AppState: ObservableObject {
         }
         clean()
         uploadCleanupTimer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { _ in clean() }
+    }
+
+    /// `.connected` is reported when a phone session starts (and when viewing stops), so the menu
+    /// shows the permissions the phone just got in `hello`.
+    private func connectionChanged(_ status: ConnectionStatus) {
+        connection = status
+        if status == .connected { refreshPermissions() }
     }
 
     func refreshPermissions() {
@@ -125,7 +138,21 @@ final class AppState: ObservableObject {
         }
     }
 
-    func showSetup() { windows.show(.setup) { SetupView(state: self) } }
+    func showSetup() {
+        windows.show(.setup, onClose: { AppState.shared.stopSetupPermissionTimer() }) { SetupView(state: self) }
+        refreshPermissions()
+        if setupPermissionTimer == nil {
+            setupPermissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+                MainActor.assumeIsolated { AppState.shared.refreshPermissions() }
+            }
+        }
+    }
+
+    private func stopSetupPermissionTimer() {
+        setupPermissionTimer?.invalidate()
+        setupPermissionTimer = nil
+    }
+
     func showSettings() { windows.show(.settings) { SettingsView(state: self) } }
 }
 
@@ -174,8 +201,10 @@ enum MenuBarIcon {
 final class WindowPresenter {
     enum Kind: String { case setup, settings }
     private var open: [Kind: NSWindow] = [:]
+    private var closeObservers: [NSObjectProtocol] = []
 
-    func show<V: View>(_ kind: Kind, @ViewBuilder content: () -> V) {
+    /// `onClose` runs each time the window closes; the window is kept and reused.
+    func show<V: View>(_ kind: Kind, onClose: (@MainActor () -> Void)? = nil, @ViewBuilder content: () -> V) {
         NSApp.activate(ignoringOtherApps: true)
         if let w = open[kind] {
             w.makeKeyAndOrderFront(nil)
@@ -191,5 +220,12 @@ final class WindowPresenter {
         w.center()
         w.makeKeyAndOrderFront(nil)
         open[kind] = w
+        if let onClose {
+            closeObservers.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: w, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { onClose() }
+            })
+        }
     }
 }
