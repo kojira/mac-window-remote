@@ -1529,6 +1529,7 @@ On a real iPhone against the real Mac:
 ## 16. Paste the iPhone clipboard or an image into the window (user decision; amends D11, D12)
 
 ### D36. 📋 Paste and 🖼 Image in the key panel
+> *Amended by §22 D42:* 📎 File uploads any file the same way and pastes its path.
 > *Amended by §17 D37:* the third row is ⌘F1, ⌘Tab, 📋 Paste, 🖼 Image, two columns each.
 > *Amended by §21 D41:* 📋 Paste and 🖼 Image moved into the ⋯ menu; they still act on touch end.
 - **Why (user request):** "paste the iPhone clipboard contents into the text" and "upload an
@@ -1995,6 +1996,7 @@ On a real iPhone against the real Mac:
 ## 21. space, ⏎, and a ⋯ menu in the key panel's third row (user decision; amends D36, D37)
 
 ### D41. Third row ⌘F1 | ⌘Tab | space | ⏎ | ⋯, with 📋 Paste, 🖼 Image, and ⌘Q in ⋯
+> *Amended by §22 D42:* the menu is 📋 Paste, 🖼 Image, 📎 File, ⌘Q.
 - **Why (user request):** space and Return with panel modifiers (⇧⏎, ⌘⏎) without opening the
   iOS keyboard, and ⌘Q in one tap.
 - **Layout (amends D36, D37).** The normal layer's third row, in six columns: **⌘F1**, **⌘Tab**,
@@ -2029,3 +2031,45 @@ On a real iPhone against the real Mac:
 6. *Unit:* the third row's keys; space and ⏎ with modifiers and repeat; Paste and Image fire
    from the menu items' touch end (not touch start, not the row); ⌘Q's merged mods; outside
    touch and panel close close the menu.
+
+## 22. Attach any file and paste its path (user decision; amends D36, D41)
+
+### D42. 📎 File in the ⋯ menu
+- **Why (user request):** attach any file, not only images, and paste its Mac path.
+- **Entry.** The ⋯ menu (D41) is 📋 Paste, 🖼 Image, **📎 File**, ⌘Q. 📎 File opens an
+  `<input type="file">` **without** an `accept` filter (iOS offers Files, Photo Library, and
+  Take Photo), inside the item's touch end like 🖼 (D36).
+- **Transport.** The D36 chunked upload on `/ws`, with `"t":"file.chunk"`; the chunk at offset 0
+  also carries `"name"` (the phone's file name, its last 200 code points so the header stays
+  under 1 KiB). Same 256 KiB chunks, send-buffer cap, progress toast, reconnect wait, "a newer
+  pick cancels the older one", and one `result`/`error` reply as images.
+- **Mac.** Any bytes are accepted; nothing is sniffed, opened, or interpreted, only written.
+  At most **100 MiB** (the phone checks `File.size` first: "File too large (max 100 MiB)";
+  the Mac replies `too_large` too). The file is saved as
+  `$TMPDIR/mac-window-remote/uploads/<UUID>/<name>`, the `<UUID>` subdirectory mode 0700, so
+  names never collide and the path ends with the real name. `<name>` is sanitized: last
+  path component only (`/` and `\` split), control characters removed, leading dots and
+  surrounding spaces removed, at most 200 UTF-8 bytes (the extension kept), else `file`.
+- **Paste.** Identical to 🖼: the **raw path, unquoted** is pasted (and left on the Mac
+  clipboard). A name with spaces therefore needs quoting by the user in a shell; images never
+  have spaces, files may. Kept identical on purpose so the two items do not differ.
+- **Cleanup (D12).** The hourly/launch cleanup also deletes `<UUID>` subdirectories (whole)
+  whose modification time is older than 24 h. Other subdirectories and links stay skipped.
+- 🖼 Image is unchanged (sniffed, 25 MiB, `img-…` names).
+- **Source changes:** `Uploads.swift` (`maxFileBytes`, `completeFile`, `sanitizedFileName`,
+  `saveFile`, cleanup), `Protocol.swift` (`fileChunk`), `Session.swift`; `web/upload.js`
+  (`fileChunkMessages`), `web/keypanel.js` (menu item), `web/app.js`, `web/index.html`,
+  `web/style.css`.
+
+### D42 acceptance criteria
+On a real iPhone against the real Mac:
+1. ⋯ shows 📋 Paste, 🖼 Image, 📎 File, ⌘Q; 📎 File opens the iOS picker with Files, Photo
+   Library, and Take Photo.
+2. Picking `My Report.pdf` from Files pastes
+   `/var/folders/…/mac-window-remote/uploads/<UUID>/My Report.pdf` into the focused field; the
+   toast says "Pasted path: …/My Report.pdf"; the file has the same bytes.
+3. A file over 100 MiB shows "File too large (max 100 MiB)" and sends nothing.
+4. 🖼 Image still works as in D36.
+5. *Unit:* file name sanitizing; unique `<UUID>` subdirectory per upload; file chunks not
+   sniffed, 100 MiB limit; cleanup of old subdirectories; `file.chunk` decoding and the
+   name only on the first chunk; 📎 File fires on the menu item's touch end.
