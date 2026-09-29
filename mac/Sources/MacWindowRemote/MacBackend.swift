@@ -17,6 +17,19 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
 
     func makePeer() -> RTCPeer? { rtc.makePeer() }
 
+    /// Created on first use, so nothing touches Core Audio until the phone asks for audio (D39).
+    private lazy var audioTap: AnyObject? = {
+        if #available(macOS 14.2, *) { return SystemAudioTap(device: rtc.audioDevice) }
+        return nil
+    }()
+
+    func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool {
+        guard #available(macOS 14.2, *) else { return target == nil }
+        let tap = lock.withLock { audioTap as? SystemAudioTap }
+        tap?.setTarget(target, events: events)
+        return tap != nil
+    }
+
     func permissions() -> PermissionsStatus { Permissions.status }
 
     func listWindows() async throws -> [WindowItem] { try await WindowCatalog.list() }

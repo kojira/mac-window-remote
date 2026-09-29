@@ -24,6 +24,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     func restoreWindow(windowId: UInt32) async -> WindowFitOutcome { .failed(.windowNotFound) }
     func windowAfterSwitch(from windowId: UInt32) async -> WindowItem? { nil }
     func makePeer() -> RTCPeer? { nil }
+    func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool { true }
 }
 
 @Suite struct InputPipelineTests {
