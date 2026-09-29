@@ -25,6 +25,20 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #windows li:active { background: #2a2a2a; }
 #windows .app { font-weight: 700; }
 #windows .wtitle { color: #aaa; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* D40: Windows | Apps, and the Apps grid (about 4 columns on an iPhone in portrait). */
+.segmented { flex: 1; display: flex; max-width: 280px; background: #2c2c2e; border-radius: 9px; padding: 2px; gap: 2px; }
+.segmented button { flex: 1; padding: 6px 0; background: transparent; border-radius: 7px; font-size: 15px; color: #ccc; }
+.segmented button[aria-selected="true"] { background: #636366; color: #fff; font-weight: 600; }
+#apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px 4px;
+  padding: 12px calc(env(safe-area-inset-right) + 8px) calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 8px); }
+.app-tile { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; padding: 8px 2px 6px;
+  background: transparent; border-radius: 12px; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.app-tile:active { background: #2a2a2a; }
+.app-tile img { width: 64px; height: 64px; pointer-events: none; }
+.app-name { max-width: 100%; font-size: 12px; color: #ddd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-dot { width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.run-dot.on { background: #ddd; }
+#app-opening { position: fixed; top: 40%; }
 
 #viewer { background: #000; padding-top: 0; }
 /* D33: the stage fills the screen above the bottom bar, inside the safe area. */
