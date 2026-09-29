@@ -15,6 +15,12 @@ export function charKeyName(text) {
   return null;
 }
 
+/// The active modifiers plus a combo key's own (D37), each once, in cmd, ctrl, opt, shift order
+/// (the Mac rejects a repeated mod).
+export function mergeMods(active, extra) {
+  return MODIFIERS.filter((m) => active.includes(m) || extra.includes(m));
+}
+
 /// Each modifier is 'off', 'armed' (applies to the next key once), or 'locked' (until tapped).
 export class ModifierState {
   constructor(onChange = () => {}) {

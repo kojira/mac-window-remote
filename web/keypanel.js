@@ -1,19 +1,24 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
 // an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
-// third row pastes the iPhone clipboard or an image into the window (D36).
+// third row has one-tap ⌘F1 and ⌘Tab (D37) and pastes the iPhone clipboard or an image into
+// the window (D36).
+
+import { mergeMods } from './modifiers.js';
 
 const LONG_PRESS_MS = 500;
 const REPEAT_DELAY_MS = 400;
 const REPEAT_INTERVAL_MS = 66; // about 15 per second
 const PRESSED_MIN_MS = 120;
 
-// {label, key} sends a key; {label, mod} is a modifier; fn and text are special.
+// {label, key} sends a key (with `mods` added to the active modifiers, D37); {label, mod} is a
+// modifier; fn and text are special.
 const NORMAL = [
   { label: 'esc', key: 'Escape' }, { label: '⇧', mod: 'shift' }, { label: 'tab', key: 'Tab' },
   { label: 'fn', fn: true }, { label: '↑', key: 'ArrowUp', repeat: true }, { label: 'text', text: true },
   { label: '⌃', mod: 'ctrl' }, { label: '⌘', mod: 'cmd' }, { label: '⌥', mod: 'opt' },
   { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
+  { label: '⌘F1', key: 'F1', mods: ['cmd'], combo: true }, { label: '⌘Tab', key: 'Tab', mods: ['cmd'], combo: true },
   { label: '📋 Paste', action: 'paste', wide: true }, { label: '🖼 Image', action: 'image', wide: true },
 ];
 const FN = [
@@ -89,6 +94,7 @@ export class KeyPanel {
       b.className = 'key';
       b.textContent = spec.label;
       if (spec.wide) b.classList.add('wide');
+      if (spec.combo) b.classList.add('combo');
       if (spec.text) this.wireText(b);
       else if (spec.action) this.wireAction(b, spec.action);
       else this.wirePress(b, spec);
@@ -173,10 +179,11 @@ export class KeyPanel {
     b.addEventListener('pointercancel', release);
   }
 
-  /// Sends the key with the active modifiers; repeat keys repeat with the same modifiers.
+  /// Sends the key with the active modifiers plus its own (a combo key, D37); repeat keys
+  /// repeat with the same modifiers.
   press(spec) {
     this.stopRepeat();
-    const mods = this.modifiers.consume();
+    const mods = mergeMods(this.modifiers.consume(), spec.mods ?? []);
     this.sendKey(spec.key, mods);
     if (!spec.repeat) return;
     this.repeatTimer = setTimeout(() => {
