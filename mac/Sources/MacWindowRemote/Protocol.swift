@@ -319,6 +319,8 @@ enum ServerMessage {
     case windowFit(windowId: UInt32, state: WindowFitState, clamped: Bool)
     /// Success of a binary request (D36); `path` is the saved image.
     case result(id: String, path: String?)
+    /// The view moved to the window that ⌘Tab or ⌘F1 brought forward (D38).
+    case viewSwitched(windowId: UInt32, app: String, title: String)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -334,6 +336,7 @@ enum ServerMessage {
     private struct Fit: Encodable {
         let t = "window.fit"; let windowId: UInt32; let state: WindowFitState; let clamped: Bool
     }
+    private struct Switched: Encodable { let t = "view.switched"; let windowId: UInt32; let app: String; let title: String }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
@@ -374,6 +377,8 @@ enum ServerMessage {
             data = try? encoder.encode(Fit(windowId: id, state: state, clamped: clamped))
         case .result(let id, let path):
             data = try? encoder.encode(Result(id: id, path: path))
+        case .viewSwitched(let id, let app, let title):
+            data = try? encoder.encode(Switched(windowId: id, app: app, title: title))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

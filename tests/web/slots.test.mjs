@@ -2,7 +2,7 @@
 // Run: node --test tests/web
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSlots, resolveSlot, decodeThumb } from '../../web/slots.js';
+import { parseSlots, resolveSlot, decodeThumb, decodeViewSwitched } from '../../web/slots.js';
 
 const W = (id, app, title) => ({ id, pid: 1, app, title, w: 800, h: 600 });
 const slot = (windowId, app, title) => ({ windowId, app, title });
@@ -49,4 +49,12 @@ test('thumb decode: jpeg, missing marker, malformed', () => {
   assert.deepEqual(decodeThumb({ t: 'thumb', windowId: 7, missing: true }), { windowId: 7, src: null });
   assert.equal(decodeThumb({ t: 'thumb', windowId: 7 }), null);
   assert.equal(decodeThumb({ t: 'thumb', windowId: '7', jpeg: '/9j/' }), null);
+});
+
+test('view.switched decodes to the viewed window (D38)', () => {
+  assert.deepEqual(decodeViewSwitched({ t: 'view.switched', windowId: 42, app: 'Editor', title: 'Notes' }),
+    { id: 42, app: 'Editor', title: 'Notes' });
+  assert.deepEqual(decodeViewSwitched({ t: 'view.switched', windowId: 42 }), { id: 42, app: '', title: '' });
+  assert.equal(decodeViewSwitched({ t: 'view.switched', windowId: '42' }), null);
+  assert.equal(decodeViewSwitched({ t: 'view.switched' }), null);
 });

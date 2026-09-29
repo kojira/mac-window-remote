@@ -1,8 +1,8 @@
 // Unit tests for the key panel's modifier state machine and typed character → key name
-// (DESIGN.md D13, D34). Run: node --test tests/web
+// (DESIGN.md D13, D34), and combo-key modifier merging (D37). Run: node --test tests/web
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ModifierState, charKeyName } from '../../web/modifiers.js';
+import { ModifierState, charKeyName, mergeMods } from '../../web/modifiers.js';
 
 test('tap arms, and the next key consumes it once in cmd, ctrl, opt, shift order', () => {
   const m = new ModifierState();
@@ -60,4 +60,15 @@ test('charKeyName: a-z, 0-9, ANSI punctuation, and space are keys; anything else
   }
   assert.equal(charKeyName(' '), 'Space');
   for (const t of ['A', 'ab', '', 'あ', '!', '€', null, undefined]) assert.equal(charKeyName(t), null);
+});
+
+test('mergeMods: a combo key adds its mods to the active ones, each once, in wire order', () => {
+  const m = new ModifierState();
+  m.tap('shift');
+  assert.deepEqual(mergeMods(m.consume(), ['cmd']), ['cmd', 'shift']); // armed ⇧ + ⌘Tab = ⌘⇧Tab
+  assert.equal(m.get('shift'), 'off');
+  m.lock('cmd');
+  assert.deepEqual(mergeMods(m.consume(), ['cmd']), ['cmd']); // never a repeated mod
+  assert.equal(m.get('cmd'), 'locked');
+  assert.deepEqual(mergeMods([], ['cmd']), ['cmd']);
 });

@@ -31,6 +31,7 @@ private final class PasteRecordingBackend: SessionBackend, @unchecked Sendable {
     func viewingChanged(_ window: WindowItem?) {}
     func fitWindow(windowId: UInt32, aspect: Double) async -> WindowFitOutcome { .failed(.windowNotFound) }
     func restoreWindow(windowId: UInt32) async -> WindowFitOutcome { .failed(.windowNotFound) }
+    func windowAfterSwitch(from windowId: UInt32) async -> WindowItem? { nil }
     func makePeer() -> RTCPeer? { nil }
 }
 

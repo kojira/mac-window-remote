@@ -82,8 +82,26 @@ struct KeyStroke: Equatable {
 }
 
 extension KeyMap {
+    /// Flags a real Apple keyboard sets on the key's own down and up events: Fn on F1–F12
+    /// and the navigation keys, plus NumericPad on the arrows. System shortcuts such as
+    /// "Move focus to next window" (⌘F1) are registered with the Fn flag and only match
+    /// events that carry it (D38).
+    static func hardwareFlags(_ code: CGKeyCode) -> CGEventFlags {
+        switch Int(code) {
+        case kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow:
+            return [.maskSecondaryFn, .maskNumericPad]
+        case kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6,
+             kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+             kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_ForwardDelete, kVK_Help:
+            return .maskSecondaryFn
+        default:
+            return []
+        }
+    }
+
     /// The events for `code` with `mods` (D9): modifier downs with cumulative flags, the key
-    /// down and up with all flags, then modifier ups in reverse order.
+    /// down and up with all flags and the key's `hardwareFlags`, then modifier ups in reverse
+    /// order.
     static func strokes(_ code: CGKeyCode, mods: [KeyModifier]) -> [KeyStroke] {
         var out: [KeyStroke] = []
         var flags: CGEventFlags = []
@@ -91,8 +109,9 @@ extension KeyMap {
             flags.insert(m.flag)
             out.append(KeyStroke(keyCode: m.keyCode, down: true, flags: flags))
         }
-        out.append(KeyStroke(keyCode: code, down: true, flags: flags))
-        out.append(KeyStroke(keyCode: code, down: false, flags: flags))
+        let keyFlags = flags.union(hardwareFlags(code))
+        out.append(KeyStroke(keyCode: code, down: true, flags: keyFlags))
+        out.append(KeyStroke(keyCode: code, down: false, flags: keyFlags))
         for m in mods.reversed() {
             flags.remove(m.flag)
             out.append(KeyStroke(keyCode: m.keyCode, down: false, flags: flags))

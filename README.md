@@ -4,7 +4,7 @@ View and operate **one Mac window at a time** from an iPhone.
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
-- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C; its text key opens the iPhone keyboard.
+- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C, one-tap ⌘F1 and ⌘Tab, and 📋 Paste / 🖼 Image; its text key opens the iPhone keyboard.
 
 ## Status
 

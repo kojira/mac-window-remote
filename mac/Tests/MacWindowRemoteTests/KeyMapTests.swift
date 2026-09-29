@@ -39,4 +39,29 @@ import Testing
             KeyStroke(keyCode: c, down: false, flags: []),
         ])
     }
+
+    /// D38: F-keys and navigation keys carry Fn (arrows also NumericPad) like a real
+    /// keyboard, so ⌘F1 matches the system shortcut; modifier events do not.
+    @Test func hardwareFlagsPerKey() {
+        let fn: CGEventFlags = .maskSecondaryFn
+        let arrow: CGEventFlags = [.maskSecondaryFn, .maskNumericPad]
+        for n in 1...12 { #expect(KeyMap.hardwareFlags(KeyMap.keyCode(for: "F\(n)")!) == fn) }
+        for name in ["Home", "End", "PageUp", "PageDown", "Delete"] {
+            #expect(KeyMap.hardwareFlags(KeyMap.keyCode(for: name)!) == fn)
+        }
+        for name in ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"] {
+            #expect(KeyMap.hardwareFlags(KeyMap.keyCode(for: name)!) == arrow)
+        }
+        for name in ["Enter", "Tab", "Escape", "Backspace", "Space", "a", "1", "`"] {
+            #expect(KeyMap.hardwareFlags(KeyMap.keyCode(for: name)!) == [])
+        }
+
+        let f1 = CGKeyCode(kVK_F1), cmd = CGKeyCode(kVK_Command)
+        #expect(KeyMap.strokes(f1, mods: [.cmd]) == [
+            KeyStroke(keyCode: cmd, down: true, flags: .maskCommand),
+            KeyStroke(keyCode: f1, down: true, flags: [.maskCommand, .maskSecondaryFn]),
+            KeyStroke(keyCode: f1, down: false, flags: [.maskCommand, .maskSecondaryFn]),
+            KeyStroke(keyCode: cmd, down: false, flags: []),
+        ])
+    }
 }
