@@ -403,6 +403,9 @@ A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom a
     - "Request" calls `AXIsProcessTrustedWithOptions` with the prompt option.
     - "Open Settings" opens `…?Privacy_Accessibility`.
     - Status is re-polled every 2 s while the window is open.
+  > *Amended (user decision: avoid constant polling):* permissions are checked at launch,
+  > when a phone session starts, when the menu bar menu opens, and every 2 s only while
+  > the Setup & Permissions window is open. There is no always-on poll.
   - The same window shows the `tailscale serve` command, the iPhone URL field, and a
     link to Pair. *(§12 D32: the allowed login field replaces the iPhone URL and Pair.)*
 - **Web client:** `hello.permissions` reports both permissions.
