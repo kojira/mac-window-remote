@@ -3,6 +3,8 @@ import { Viewer } from './viewer.js';
 import { VideoLink } from './rtc.js';
 import { TextInput } from './input.js';
 import { SlotBar } from './slotbar.js';
+import { ModifierState } from './modifiers.js';
+import { KeyPanel } from './keypanel.js';
 
 /// The viewed window {id, app, title} (D33: slots store the app and title too).
 const WINDOW_KEY = 'mwr.window';
@@ -48,7 +50,7 @@ $('denied-retry').addEventListener('click', () => {
 function show(name) {
   screen = name;
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
-  if (name !== 'viewer') textInput.blur();
+  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); }
 }
 
 function setConnDots(state) {
@@ -436,11 +438,24 @@ const slotBar = new SlotBar({
   onChange: requestThumbs,
 });
 
+const modifiers = new ModifierState();
+
 const textInput = new TextInput({
   field: $('text'),
-  button: $('keyboard'),
   bar: $('bottom-bar'),
+  dock: $('dock'),
+  modifiers,
   send: sendInput,
+});
+
+const keyPanel = new KeyPanel({
+  panel: $('key-panel'),
+  toggle: $('keyboard'),
+  viewerEl: $('viewer'),
+  modifiers,
+  textInput,
+  sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
+  onLayout: (change) => viewer.keepZoom(change),
 });
 
 // Earlier versions paired with a stored secret; it is no longer used.

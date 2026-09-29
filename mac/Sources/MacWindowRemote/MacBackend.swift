@@ -131,8 +131,8 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             await InputInjector.scroll(at: p, dx: du * bounds.width, dy: dv * bounds.height)
         case .text(let text):
             await InputInjector.type(text)
-        case .key(let name):
-            await InputInjector.key(name)
+        case .key(let name, let mods):
+            await InputInjector.key(name, mods: mods)
         }
         if case .scroll = action.kind { return nil }
         let total = ContinuousClock.now - started

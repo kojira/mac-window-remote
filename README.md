@@ -4,11 +4,11 @@ View and operate **one Mac window at a time** from an iPhone.
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
-- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent).
+- The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C; its text key opens the iPhone keyboard.
 
 ## Status
 
-**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Clipboard text, image upload, and the key bar are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Clipboard text, image upload, and custom key buttons are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Honest constraints
 
@@ -40,7 +40,7 @@ CODESIGN_IDENTITY="<name of the identity>" scripts/build-app.sh
 
 Development: `MWR_WEB_ROOT=$PWD/web build/MacWindowRemote.app/Contents/MacOS/MacWindowRemote` serves the web client from disk, so client edits need only a reload.
 
-Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer and the quick-switch slots.
+Tests: `cd mac && swift test`, and `node --test tests/web/*.test.mjs` for the gesture recognizer, the quick-switch slots, and the key panel modifiers.
 
 The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, BSD-style license in `Contents/Resources/WebRTC-LICENSE`); `scripts/build-app.sh` embeds and signs it.
 

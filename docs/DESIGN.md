@@ -3,7 +3,8 @@
 Status: **Slice 1 implemented, then replaced by revision 2 (§11: WebRTC video and
 trackpad-style input), which is implemented and awaits acceptance on a real iPhone.
 §12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
-viewer's top bar with a bottom bar that has quick-switch slots.** Sections marked *Superseded by §11* describe
+viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
+D13 key bar with a key panel.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -334,6 +335,8 @@ following:
   folder" menu item reveals the directory in Finder.
 
 ### D13. Key bar and custom buttons (slice 4)
+> *The key bar layout is superseded by §14 D34 (a 2×6 key panel). The one-shot and lock
+> modifier rules below carry over. Custom buttons remain a later slice.*
 - The key bar is a horizontally scrollable row above the text field. Defaults:
   `Esc  Tab  ←  ↑  ↓  →  ⏎  ⌫  ⌃  ⌥  ⌘  ⇧`, then the user's custom buttons, then `＋`.
 - **Modifiers are one-shot:**
@@ -727,7 +730,7 @@ changes the UX, the protocol, or the permissions.
 - **Slice 1 key names.** The phone sends only `Enter` and `Backspace` in slice 1, and the
   text chunker sends `Tab` for `\t`. `KeyMap` holds just those three. The server rejects
   other names and any non-empty `mods` with `bad_request`. The full §4.3 table arrives with
-  the key bar in slice 4.
+  the key bar in slice 4. *(§14 D34 adds the full §4.3 table and `mods`.)*
 - **Slice 1 message size.** `/ws` accepts messages up to 1 MiB in slice 1. D12 raises the
   limit to 26 MiB when image upload arrives in slice 3. Binary client messages get
   `bad_request` until then.
@@ -1317,3 +1320,83 @@ On a real iPhone against the real Mac:
    is sent while the list is shown or Safari is in the background.
 7. *Unit:* slot resolution rules 1–4; `thumbs.request` decoding (including more than 3
    ids and a missing array); `thumb` encoding and the phone's `thumb` decoding.
+
+## 14. Key panel (user decision; supersedes the D13 key bar layout)
+
+### D34. A 2×6 key panel toggled by ⌨︎
+- **Why (user request, with a reference image):** the iOS keyboard cannot type Esc, Tab,
+  arrows, F-keys, or ⌘/⌃/⌥ shortcuts such as ⌘C, ⌘V, and ⌃C. The panel gives those keys
+  large targets. Custom buttons (D13) are not part of this step.
+- **Entry.** ⌨︎ in the bottom bar (D33) toggles the key panel; ⌨︎ is highlighted while
+  the panel is open. It no longer opens the iOS keyboard directly; the panel's **text**
+  key does. Closing the panel also hides the iOS keyboard, turns every modifier off
+  (including locked ones), and returns to the normal layer; leaving the viewer closes
+  the panel. So modifiers only ever apply while the panel is visible.
+- **Layout.** The panel sits directly above the bottom bar and moves with it above the
+  iOS keyboard. Keys are large dark rounded buttons in a grid of six equal columns that
+  spans the safe-area width (at most 640 px wide, centered, in landscape). While the
+  panel is open the video stage ends at the panel's top edge (the stage shrinks and the
+  video re-fits), so the panel never hides part of the window. With the iOS keyboard up,
+  the keyboard and panel cover the lower part of the stage, as the bar already does (D33).
+  - Normal layer:
+    | esc | ⇧ | tab | fn | ↑ | text |
+    |---|---|---|---|---|---|
+    | ⌃ | ⌘ | ⌥ | ← | ↓ | → |
+  - **fn layer** (fn is highlighted; tap fn again to return). Twelve F-keys and fn do not
+    fit 12 slots, so this layer has a third row; the panel grows by one row while it is
+    shown:
+    | F1 | F2 | F3 | F4 | F5 | F6 |
+    |---|---|---|---|---|---|
+    | F7 | F8 | F9 | F10 | F11 | F12 |
+    | fn | Home | End | PgUp | PgDn | ⌦ |
+  - Modifiers are armed in the normal layer and stay armed across the switch, so ⌘ then
+    fn then F5 sends ⌘F5. The layer stays until fn is tapped again.
+- **Key names sent** (§4.3): esc `Escape`, tab `Tab`, arrows `ArrowUp/Down/Left/Right`,
+  `F1`–`F12`, `Home`, `End`, `PageUp`, `PageDown`, ⌦ `Delete` (forward delete).
+- **Modifiers ⇧ ⌃ ⌘ ⌥ (one-shot, from D13).**
+  - Tap: off → armed (highlighted) → tap again → off. A long press (500 ms) locks it
+    (a stronger highlight) until it is tapped again.
+  - The next key — a panel key, or Return/Backspace from the text field (D10) — is sent
+    as `key` with the active modifiers, in the order cmd, ctrl, opt, shift. Armed
+    modifiers then disarm; locked ones stay.
+  - While any modifier is active, a single committed character typed on the iOS keyboard
+    that is `[a-z0-9]` or ANSI punctuation (§4.3) is not inserted into the field; it is
+    sent at once as `key` with the modifiers (⌘ then "c" is ⌘C). A space is sent as
+    `Space`. Anything else (an uppercase letter, IME composition, pasted or longer text)
+    goes into the field as usual and is sent as plain `text` on Return; sending text
+    disarms armed modifiers.
+- **text key.** Focuses the existing text field so the iOS keyboard appears (IME and
+  Japanese input work as in D10); tapping it again while the keyboard is up hides it.
+  Panel keys do not take focus, so tapping them keeps the iOS keyboard open.
+- **Auto-repeat.** ←↑↓→, ⌦, PgUp, and PgDn repeat while held: the first `key` on press,
+  then after 400 ms about 15 per second (every 66 ms) until the finger lifts (or the
+  touch is cancelled, or the page is hidden). A touch stays captured by the key it
+  started on, so sliding off does not stop the repeat. The modifiers active at the press
+  apply to every repeat. Other keys send once on press.
+- **Feedback.** A pressed key shows a brief highlight (iOS Safari has no vibration API).
+- **Protocol.** `key` on the `control` data channel (D28) with optional
+  `mods` (default `[]`): `{"t":"key","key":"c","mods":["cmd"]}`. The Mac accepts the key
+  names in §4.3 and the mods `cmd`, `ctrl`, `opt`, `shift`, each at most once; an unknown
+  key or mod, or a repeated mod, is `bad_request`. Unchanged on the WebSocket.
+- **Mac injection** (D9, through the D25 focus pipeline): modifier key-downs with
+  cumulative flags, the key down/up with all flags, then modifier key-ups in reverse.
+- **Source changes:** `KeyMap.swift` (full §4.3 table, `KeyModifier`, combo event order),
+  `Protocol.swift` (`key` mods), `InputPipeline.swift`, `Session.swift`,
+  `MacBackend.swift`, `InputInjector.swift`; `web/modifiers.js` (new: modifier state and
+  character → key name), `web/keypanel.js` (new: the panel), `web/input.js` (modifiers
+  on keys and single characters), `web/app.js`, `web/index.html`, `web/style.css`.
+
+### D34 acceptance criteria
+On a real iPhone against the real Mac:
+1. ⌨︎ shows and hides the 2×6 panel above the bottom bar in portrait and landscape,
+   nothing under the notch or home indicator; the video re-fits above the panel.
+2. esc, tab, and the arrows act on the Mac window; holding an arrow repeats after about
+   0.4 s.
+3. ⌘ then typing "c" on the iOS keyboard copies; ⌘ then "v" pastes; ⌃ then "c" in
+   Terminal interrupts. ⌘ disarms after use; a long-pressed ⌘ stays until tapped.
+4. text opens the iOS keyboard with the panel above it; Japanese input still sends on
+   Return; tapping panel keys does not close the keyboard; text again hides it.
+5. fn shows F1–F12 plus Home/End/PgUp/PgDn/⌦; F-keys work; fn returns to the normal layer.
+6. *Unit:* Mac `key` decoding with `mods` (valid, unknown, repeated), the `KeyMap` table
+   and combo event order; the web modifier state machine (arm, one-shot, lock, disarm on
+   text) and character → key mapping.

@@ -254,8 +254,8 @@ actor Session {
             await input.submit(start ? .dragStart : .dragEnd)
         case .text(let text):
             await input.submit(.text(text))
-        case .key(let name):
-            await input.submit(.key(name))
+        case .key(let name, let mods):
+            await input.submit(.key(name, mods: mods))
         }
     }
 

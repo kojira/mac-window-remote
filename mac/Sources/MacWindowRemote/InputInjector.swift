@@ -74,11 +74,12 @@ enum InputInjector {
         e?.post(tap: tap)
     }
 
-    static func key(_ name: String) {
+    /// A named key, with modifier keys held around it (D9, D34).
+    static func key(_ name: String, mods: [KeyModifier] = []) {
         guard let code = KeyMap.keyCode(for: name) else { return }
-        for down in [true, false] {
-            let e = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
-            e?.flags = []
+        for s in KeyMap.strokes(code, mods: mods) {
+            let e = CGEvent(keyboardEventSource: source, virtualKey: s.keyCode, keyDown: s.down)
+            e?.flags = s.flags
             e?.post(tap: tap)
         }
     }

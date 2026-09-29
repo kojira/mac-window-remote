@@ -45,11 +45,12 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .overlay { position: absolute; left: 16px; right: 16px; top: 40%; text-align: center; padding: 12px;
   background: rgba(0, 0, 0, 0.75); border-radius: 10px; pointer-events: none; }
 
-#bottom-bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 8px; align-items: center;
+#dock { position: absolute; left: 0; right: 0; bottom: 0; }
+#bottom-bar { display: flex; gap: 8px; align-items: center;
   height: calc(56px + env(safe-area-inset-bottom));
   padding: 6px calc(env(safe-area-inset-right) + 10px) calc(env(safe-area-inset-bottom) + 6px) calc(env(safe-area-inset-left) + 10px);
   background: #1c1c1e; }
-#bottom-bar.keyboard-up { height: 56px; padding-bottom: 6px; }
+#dock.keyboard-up #bottom-bar { height: 56px; padding-bottom: 6px; }
 #bottom-bar > button { height: 44px; flex: none; }
 #back { position: relative; width: 44px; padding: 0; font-size: 26px; line-height: 1; }
 #back .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; }
@@ -66,6 +67,25 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #bottom-bar.typing #slots, #bottom-bar.typing #fit { display: none; }
 #text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; padding: 8px 0; border-width: 0; }
 #bottom-bar.typing #text { flex: 1; opacity: 1; padding: 8px 10px; border-width: 1px; }
+#keyboard.active { background: #0a84ff; }
+
+/* D34: the key panel sits above the bottom bar; the stage ends at its top edge. */
+#viewer { --key-h: 50px; --panel-rows: 2; --panel-h: calc(var(--panel-rows) * (var(--key-h) + 6px) + 6px); }
+#viewer.fn-layer { --panel-rows: 3; }
+@media (max-height: 500px) { #viewer { --key-h: 38px; } }
+#viewer.panel-open #stage { bottom: calc(56px + var(--panel-h) + env(safe-area-inset-bottom)); }
+#viewer.panel-open #drag-badge, #viewer.panel-open #slot-menu .sheet {
+  bottom: calc(env(safe-area-inset-bottom) + 64px + var(--panel-h)); }
+#key-panel { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: var(--key-h); gap: 6px;
+  height: var(--panel-h); padding: 6px max(calc(env(safe-area-inset-right) + 8px), calc((100% - 640px) / 2))
+  0 max(calc(env(safe-area-inset-left) + 8px), calc((100% - 640px) / 2));
+  background: #1c1c1e; border-top: 1px solid #2c2c2e; }
+.key { min-width: 0; padding: 0; border-radius: 10px; background: #2c2c2e; color: #fff; font-size: 20px;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+.key:active, .key.pressed { background: #5a5a5e; }
+.key.active { background: #0a84ff; }
+.key.active.pressed { background: #409cff; }
+.key.locked { background: #0a84ff; box-shadow: inset 0 0 0 3px #fff; }
 #slot-menu { position: absolute; inset: 0; z-index: 5; }
 #slot-menu .sheet { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 64px);
   display: flex; flex-direction: column; gap: 6px; padding: 8px; background: rgba(44, 44, 46, 0.97); border-radius: 12px; }

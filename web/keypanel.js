@@ -1,0 +1,171 @@
+// The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
+// an fn layer with F1–F12, and a text key that opens the iOS keyboard.
+
+const LONG_PRESS_MS = 500;
+const REPEAT_DELAY_MS = 400;
+const REPEAT_INTERVAL_MS = 66; // about 15 per second
+const PRESSED_MIN_MS = 120;
+
+// {label, key} sends a key; {label, mod} is a modifier; fn and text are special.
+const NORMAL = [
+  { label: 'esc', key: 'Escape' }, { label: '⇧', mod: 'shift' }, { label: 'tab', key: 'Tab' },
+  { label: 'fn', fn: true }, { label: '↑', key: 'ArrowUp', repeat: true }, { label: 'text', text: true },
+  { label: '⌃', mod: 'ctrl' }, { label: '⌘', mod: 'cmd' }, { label: '⌥', mod: 'opt' },
+  { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
+  { label: '→', key: 'ArrowRight', repeat: true },
+];
+const FN = [
+  ...Array.from({ length: 12 }, (_, i) => ({ label: `F${i + 1}`, key: `F${i + 1}` })),
+  { label: 'fn', fn: true }, { label: 'Home', key: 'Home' }, { label: 'End', key: 'End' },
+  { label: 'PgUp', key: 'PageUp', repeat: true }, { label: 'PgDn', key: 'PageDown', repeat: true },
+  { label: '⌦', key: 'Delete', repeat: true },
+];
+
+export class KeyPanel {
+  /// sendKey(name, mods): send a `key` message. modifiers: a ModifierState.
+  /// textInput: the TextInput (focus/blur of the iOS keyboard field).
+  /// onLayout(change): runs change(), which opens, closes, or resizes the panel, and re-fits
+  /// the stage around it.
+  constructor({ panel, toggle, viewerEl, modifiers, textInput, sendKey, onLayout }) {
+    this.panel = panel;
+    this.toggleButton = toggle;
+    this.viewerEl = viewerEl;
+    this.modifiers = modifiers;
+    this.textInput = textInput;
+    this.sendKey = sendKey;
+    this.onLayout = onLayout;
+    this.fnLayer = false;
+    this.modButtons = [];
+    this.textButton = null;
+    this.repeatTimer = null;
+
+    toggle.addEventListener('click', () => (this.isOpen() ? this.close() : this.open()));
+    modifiers.onChange = () => this.renderModifiers();
+    textInput.onFocusChange = (focused) => this.textButton?.classList.toggle('active', focused);
+    // A held key must not keep repeating into a later connection.
+    document.addEventListener('visibilitychange', () => this.stopRepeat());
+    this.render();
+  }
+
+  isOpen() { return !this.panel.hidden; }
+
+  open() {
+    this.toggleButton.classList.add('active');
+    this.panel.hidden = false;
+    this.layoutChanged();
+  }
+
+  /// Also hides the iOS keyboard and clears modifiers and the fn layer.
+  close() {
+    if (!this.isOpen()) return;
+    this.stopRepeat();
+    this.panel.hidden = true;
+    this.toggleButton.classList.remove('active');
+    this.textInput.blur();
+    this.modifiers.reset();
+    if (this.fnLayer) { this.fnLayer = false; this.render(); }
+    this.layoutChanged();
+  }
+
+  layoutChanged() {
+    this.onLayout(() => {
+      this.viewerEl.classList.toggle('panel-open', this.isOpen());
+      this.viewerEl.classList.toggle('fn-layer', this.isOpen() && this.fnLayer);
+    });
+  }
+
+  render() {
+    this.stopRepeat();
+    this.panel.textContent = '';
+    this.modButtons = [];
+    this.textButton = null;
+    for (const spec of this.fnLayer ? FN : NORMAL) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'key';
+      b.textContent = spec.label;
+      if (spec.text) this.wireText(b);
+      else this.wirePress(b, spec);
+      if (spec.mod) { b.dataset.mod = spec.mod; this.modButtons.push(b); }
+      if (spec.fn) b.classList.toggle('active', this.fnLayer);
+      this.panel.append(b);
+    }
+    this.renderModifiers();
+  }
+
+  renderModifiers() {
+    for (const b of this.modButtons) {
+      const s = this.modifiers.get(b.dataset.mod);
+      b.classList.toggle('active', s !== 'off');
+      b.classList.toggle('locked', s === 'locked');
+    }
+  }
+
+  /// The text key toggles the iOS keyboard. The touch never takes focus from the field, and
+  /// focus() runs in touchend, a user gesture, so iOS shows the keyboard.
+  wireText(b) {
+    const toggle = () => {
+      if (this.textInput.isFocused()) this.textInput.blur(); else this.textInput.focus();
+    };
+    b.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    b.addEventListener('touchend', (e) => { e.preventDefault(); toggle(); });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('click', toggle); // no touch: mouse or keyboard
+    b.classList.toggle('active', this.textInput.isFocused());
+    this.textButton = b;
+  }
+
+  /// Other keys act on press and never take focus, so the iOS keyboard stays open.
+  wirePress(b, spec) {
+    let longTimer = null;
+    let longPressed = false;
+    let pressedAt = 0;
+    b.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    b.addEventListener('mousedown', (e) => e.preventDefault());
+    b.addEventListener('contextmenu', (e) => e.preventDefault());
+    b.addEventListener('pointerdown', () => {
+      pressedAt = performance.now();
+      b.classList.add('pressed');
+      if (spec.mod) {
+        longPressed = false;
+        longTimer = setTimeout(() => { longPressed = true; this.modifiers.lock(spec.mod); }, LONG_PRESS_MS);
+      } else if (spec.fn) {
+        this.fnLayer = !this.fnLayer;
+        this.render();
+        this.layoutChanged();
+      } else {
+        this.press(spec);
+      }
+    });
+    const release = (e) => {
+      const left = PRESSED_MIN_MS - (performance.now() - pressedAt);
+      setTimeout(() => b.classList.remove('pressed'), Math.max(0, left));
+      if (spec.mod) {
+        clearTimeout(longTimer);
+        if (e.type === 'pointerup' && !longPressed) this.modifiers.tap(spec.mod);
+      } else {
+        this.stopRepeat();
+      }
+    };
+    b.addEventListener('pointerup', release);
+    b.addEventListener('pointercancel', release);
+  }
+
+  /// Sends the key with the active modifiers; repeat keys repeat with the same modifiers.
+  press(spec) {
+    this.stopRepeat();
+    const mods = this.modifiers.consume();
+    this.sendKey(spec.key, mods);
+    if (!spec.repeat) return;
+    this.repeatTimer = setTimeout(() => {
+      this.repeatTimer = setInterval(() => this.sendKey(spec.key, mods), REPEAT_INTERVAL_MS);
+    }, REPEAT_DELAY_MS);
+  }
+
+  stopRepeat() {
+    // A timer id is either the delay timeout or the interval; clearing both is safe.
+    clearTimeout(this.repeatTimer);
+    clearInterval(this.repeatTimer);
+    this.repeatTimer = null;
+  }
+}
