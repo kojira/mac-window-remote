@@ -26,9 +26,10 @@ final class WindowResizer: @unchecked Sendable {
             if savedNow { lock.withLock { saved.forget(windowId) } }
             return .failed(.windowNotResizable)
         }
+        // Center the size the app actually took; this also corrects a position the window
+        // server constrained while the window still had its old size.
         let actual = Self.size(of: window) ?? target.size
-        let origin = WindowFit.centeredOrigin(size: actual, in: visible)
-        if origin != target.origin { Self.setPosition(window, origin) }
+        Self.setPosition(window, WindowFit.centeredOrigin(size: actual, in: visible))
         let clamped = WindowFit.isClamped(requested: target.size, actual: actual)
         log.info("window fit id=\(windowId, privacy: .public) clamped=\(clamped, privacy: .public)")
         return .done(.fitted, clamped: clamped)
