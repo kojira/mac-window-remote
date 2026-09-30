@@ -1,12 +1,28 @@
 # mac-window-remote
 
-View and operate **one Mac window at a time** from an iPhone.
-
 <p>
   <img src="docs/images/logic-mix.webp" width="260" alt="Mixing in Logic Pro from an iPhone: the track area and a plug-in window">
   <img src="docs/images/app-store.webp" width="260" alt="A Mac window shown full-height on the iPhone">
   <img src="docs/images/key-panel.webp" width="260" alt="The key panel with esc, arrows, modifiers, ⌘F1, ⌘W, and space">
 </p>
+
+**Your Mac's windows, in your pocket — see them, touch them, hear them.**
+
+- **One window, full focus:** pick any Mac window and use it on your iPhone (or a PC browser) as sharp, low-latency video, with a trackpad-style pointer, keyboard, shortcuts, and menus.
+- **Private by design:** it runs only inside your own Tailscale network, with no cloud relay, no accounts, and no pairing codes.
+- **More than a mirror:** the Mac's sound on your phone, plug-in and floating windows included, and files downloaded or uploaded in a tap.
+
+## What you can do with it
+
+- **Still lugging your MacBook around? Why?** Leave it on the desk. Its apps now ride in your pocket, and your shoulders will send you a thank-you note.
+- **Work from bed. (Warning: you may never get up again.)** Apart from meetings, pretty much the whole workday now fits on an iPhone. Your desk chair misses you. Your pillow does not.
+- **Mix in the bath.** Sit back in the tub, turn Logic Pro's plug-in knobs and faders on your iPhone, and hear the result through it, not the Mac's speakers.
+- **Drive a desktop coding agent from anywhere.** Keep Cursor (or any desktop IDE / agent app) running on the Mac, and check its progress, answer its prompts, and type the next instruction from your phone.
+- **Babysit long jobs.** Watch a render, export, build, or download, and click “OK” on the dialog that would otherwise have stalled it — from another room or outside.
+- **Grab a file you forgot.** Browse the Mac, search by name, and download one file or a zip of several to your phone.
+- **Drop a file into the Mac.** Send a photo or any file from the phone; its Mac path is pasted into the window you are using, ready for a chat box or a terminal.
+
+## Features
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
