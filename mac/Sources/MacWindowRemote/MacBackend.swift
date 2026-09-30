@@ -263,6 +263,14 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             case .click:
                 // A title-bar button (Logic Pro's are separate windows) ignores a synthetic
                 // click, so it is pressed over AX; a failed press falls back to the click (D44).
+                if let button = TitleButtonPress.windowButton(at: p, pid: pid) {
+                    let result = TitleButtonPress.press(button.element)
+                    log.notice("click ax-press window-button=\(button.kind.rawValue, privacy: .public) result=\(result.rawValue, privacy: .public)")
+                    if result == .pressed {
+                        clickCounter.reset()
+                        break
+                    }
+                }
                 if let button = TitleButtonPress.button(at: p, pid: pid) {
                     let result = TitleButtonPress.press(button.element)
                     log.notice("click ax-press subrole=\(button.subrole, privacy: .public) result=\(result.rawValue, privacy: .public)")

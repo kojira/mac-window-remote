@@ -2151,9 +2151,16 @@ On a real iPhone against the real Mac:
   window; a floating one when its app is frontmost and it is the focused window; otherwise it
   is activated and AX-raised (D8). Each click logs the target id and focus outcome.
   Title-bar buttons: Logic Pro draws them in separate tiny windows that ignore a synthetic
-  click, so before posting a left tap (`click`, not a drag or right click) the Mac hit-tests
-  with Accessibility (`AXUIElementCopyElementAtPosition` on the app, else system-wide keeping
-  only a result of the same pid; 0.3 s messaging timeout). When that element's or its parent's
+  click and have no AX element of their own at the point, so before posting a left tap
+  (`click`, not a drag or right click) the Mac first reads the close, minimize, zoom and
+  full-screen button attributes of each of the app's AX windows (0.3 s messaging timeout) and
+  their frames; when the point is inside one (inflated by 3 pt; the smallest frame if several),
+  that button gets `kAXPressAction` instead of the click (logged `click ax-press
+  window-button=…`). Every tap logs `title-buttons windows=N buttons=M hit=<kind|none>
+  point=x,y`; with no hit, each AX window whose top 40 pt holds the point also logs its frame
+  and its buttons' frames (numbers only). Otherwise the Mac hit-tests with Accessibility
+  (`AXUIElementCopyElementAtPosition` on the app, else system-wide keeping only a result of the
+  same pid). When that element's or its parent's
   `AXSubrole` is `AXCloseButton`, `AXMinimizeButton`, `AXZoomButton` or `AXFullScreenButton`, it
   gets `kAXPressAction` instead of the click (logged `click ax-press subrole=… result=…`); a
   failed press falls back to the click. Keys go to
@@ -2182,7 +2189,8 @@ On the real Mac and iPhone:
    windows, kept until closed, pre-existing excluded, union and display clamping, no children
    ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
    order past other apps' and system overlay windows (`ChildWindowsTests`); title-bar button
-   subrole (own or parent) ⇒ AX press, else click (`TitleButtonPressTests`).
+   subrole (own or parent) ⇒ AX press, else click (`TitleButtonPressTests`); point in a
+   window button's frame ±3 pt, smallest frame wins, 40 pt top band (`TitleButtonHitTests`).
 
 ## 24. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
 
