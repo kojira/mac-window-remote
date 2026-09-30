@@ -1,6 +1,6 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
 // an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
-// third row is one-tap ⌘F1 and ⌘Tab (D37), space, ⏎, and ⋯, a menu with 📋 Paste and 🖼 Image
+// third row is one-tap ⌘F1 and ⌘W (D37, D48), space, ⏎, and ⋯, a menu with 📋 Paste and 🖼 Image
 // (D36), 📎 File (D42), ⬇︎ Download (D47), and ⌘Q (D41).
 
 import { mergeMods } from './modifiers.js';
@@ -18,7 +18,7 @@ const NORMAL = [
   { label: '⌃', mod: 'ctrl' }, { label: '⌘', mod: 'cmd' }, { label: '⌥', mod: 'opt' },
   { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
-  { label: '⌘F1', key: 'F1', mods: ['cmd'], combo: true }, { label: '⌘Tab', key: 'Tab', mods: ['cmd'], combo: true },
+  { label: '⌘F1', key: 'F1', mods: ['cmd'], combo: true }, { label: '⌘W', key: 'w', mods: ['cmd'], combo: true },
   { label: 'space', key: 'Space', repeat: true, wide: true }, { label: '⏎', key: 'Enter', repeat: true },
   { label: '⋯', more: true },
 ];

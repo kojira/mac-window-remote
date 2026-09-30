@@ -5,7 +5,7 @@ trackpad-style input), which is implemented and awaits acceptance on a real iPho
 §12 (D32) replaces pairing with the Mac owner's Tailscale identity. §13 (D33) replaces the
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
-§16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.
+§16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys (§27 D48 swaps ⌘Tab for ⌘W).
 §19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab. §23 (D45) adds
 a desktop browser's mouse and keyboard.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
@@ -2286,3 +2286,11 @@ Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and 
 - A selection over 2 GB shows the limit message and downloads nothing.
 - Search finds names under the current folder, `/`, or a typed `~/…` path within about 5 s.
 - A used or expired `/download/…` link answers 404.
+
+## 27. ⌘W instead of ⌘Tab in the key panel (user decision; amends D37)
+
+### D48. The third row's second key is ⌘W
+
+The user closes windows far more often than switching with ⌘Tab, and some apps' title-bar close buttons ignore a synthetic click (Issue #26). The key panel's third row is now ⌘F1, **⌘W**, space, ⏎, ⋯. ⌘W is an ordinary combo (`w` with `cmd`) sent to the viewed window's app; when that closes the viewed window, the existing window-closed handling applies. ⌘Tab is still available as ⌘ then tab.
+
+Acceptance: ⌘W in the key panel closes the Mac's front window of the viewed app (for example Logic Pro's Settings panel); ⌘ then tab still switches apps.
