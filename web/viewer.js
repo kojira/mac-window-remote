@@ -2,7 +2,7 @@
 // The window arrives as a WebRTC video track (rtc.js); the overlay uses the video's intrinsic
 // size, and the cursor is in window-normalized coordinates, so no frame header is needed.
 import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
-import { clickCount, mouseButtonName, stageToWindow, wheelPixels } from './desktop.js';
+import { clickCount, mouseButtonName, pinchFactor, stageToWindow, wheelPixels } from './desktop.js';
 
 const MAX_ZOOM = 8;
 /// A thumb-sized swipe covers a useful distance of the window (D24).
@@ -298,10 +298,16 @@ export class Viewer {
   }
 
   /// The wheel scrolls the Mac window like the two-finger scroll (D26). Ctrl+wheel (a laptop
-  /// trackpad pinch) is swallowed so the page does not zoom.
+  /// trackpad pinch, or Ctrl + mouse wheel) zooms the view at the pointer like a pinch on the
+  /// phone, instead of zooming the page (D49).
   onWheel(e) {
     e.preventDefault();
-    if (e.ctrlKey || !this.size) return;
+    if (!this.size) return;
+    if (e.ctrlKey) {
+      const r = this.stage.getBoundingClientRect();
+      this.zoomBy({ factor: pinchFactor(e), x: e.clientX - r.left, y: e.clientY - r.top, dx: 0, dy: 0 });
+      return;
+    }
     const { dx, dy } = wheelPixels(e, this.stage.clientHeight);
     this.queueScroll(dx, dy);
   }

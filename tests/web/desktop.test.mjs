@@ -139,3 +139,13 @@ test('stage points map to window coordinates through the zoom and offset', () =>
   assert.equal(stageToWindow(99, 200, rect, false), null);
   assert.deepEqual(stageToWindow(0, 400, rect, true), { u: 0, v: 1 });
 });
+
+test('Ctrl+wheel (trackpad pinch) zooms: out when deltaY > 0, in when < 0, bounded per event (D49)', async () => {
+  const { pinchFactor } = await import('../../web/desktop.js');
+  assert.ok(pinchFactor({ deltaY: -10, deltaMode: 0 }) > 1);
+  assert.ok(pinchFactor({ deltaY: 10, deltaMode: 0 }) < 1);
+  assert.equal(pinchFactor({ deltaY: 0, deltaMode: 0 }), 1);
+  // Line deltas are scaled to pixels and share the per-event cap.
+  assert.equal(pinchFactor({ deltaY: 10, deltaMode: 1 }), pinchFactor({ deltaY: 1000, deltaMode: 0 }));
+  assert.ok(pinchFactor({ deltaY: 1000, deltaMode: 0 }) > 0.3);
+});

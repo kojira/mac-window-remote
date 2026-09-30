@@ -75,6 +75,14 @@ export function wheelPixels(e, pageHeight) {
 
 /// A point in stage CSS px → window-normalized (u, v), or null outside the video unless
 /// `clamp` (a drag keeps going at the edge).
+/// Ctrl+wheel (a trackpad pinch, or Ctrl + mouse wheel) → a zoom factor (D49). Wheel-up
+/// (negative deltaY) zooms in. Line and page deltas are scaled to pixels first.
+export function pinchFactor(e) {
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+  const dy = Math.max(-100, Math.min(100, e.deltaY * unit));
+  return Math.exp(-dy * 0.01);
+}
+
 export function stageToWindow(x, y, { tx, ty, scale, width, height }, clamp) {
   const u = (x - tx) / (width * scale);
   const v = (y - ty) / (height * scale);

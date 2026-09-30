@@ -2294,3 +2294,11 @@ Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and 
 The user closes windows far more often than switching with ⌘Tab, and some apps' title-bar close buttons ignore a synthetic click (Issue #26). The key panel's third row is now ⌘F1, **⌘W**, space, ⏎, ⋯. ⌘W is an ordinary combo (`w` with `cmd`) sent to the viewed window's app; when that closes the viewed window, the existing window-closed handling applies. ⌘Tab is still available as ⌘ then tab.
 
 Acceptance: ⌘W in the key panel closes the Mac's front window of the viewed app (for example Logic Pro's Settings panel); ⌘ then tab still switches apps.
+
+## 28. Pinch zoom in a desktop browser (user decision; amends D45)
+
+### D49. Ctrl+wheel zooms the view at the pointer
+
+A trackpad pinch in desktop browsers arrives as a `wheel` event with `ctrlKey` set, which D45 only swallowed. It now zooms the phone-style view (the same `zoomBy` as a two-finger pinch, clamped to Fit … 8×) around the pointer, by `exp(-deltaY × 0.01)` per event with deltaY capped at ±100 px. Ctrl + mouse wheel zooms the same way. Fit resets. Nothing is sent to the Mac.
+
+Acceptance: in a desktop browser, a trackpad pinch-out zooms in at the pointer and pinch-in zooms out down to Fit; the page itself does not zoom; plain wheel still scrolls the Mac window.
