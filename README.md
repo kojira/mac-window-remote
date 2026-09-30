@@ -14,12 +14,11 @@
 
 ## What you can do with it
 
-- **Mix and tweak from the couch or the booth.** Adjust plug-in knobs and faders in Logic Pro and hear the result through your iPhone while you sit where you actually listen.
+- **Mix in the bath.** Sit back in the tub, turn Logic Pro's plug-in knobs and faders on your iPhone, and hear the result through it, not the Mac's speakers.
+- **Drive a desktop coding agent from anywhere.** Keep Cursor (or any desktop IDE / agent app) running on the Mac, and check its progress, answer its prompts, and type the next instruction from your phone.
 - **Babysit long jobs.** Watch a render, export, build, or download, and click “OK” on the dialog that would otherwise have stalled it — from another room or outside.
-- **Answer the one app you need.** Reply in a desktop-only chat or mail app, approve something in a browser window, or check a dashboard without opening the laptop.
 - **Grab a file you forgot.** Browse the Mac, search by name, and download one file or a zip of several to your phone.
-- **Drop a file into the Mac.** Send a photo or any file from the phone; its Mac path is pasted into the window you are using.
-- **Use a bigger screen when you have one.** Open the same page in a PC browser for a mouse, a physical keyboard, and pinch zoom.
+- **Drop a file into the Mac.** Send a photo or any file from the phone; its Mac path is pasted into the window you are using, ready for a chat box or a terminal.
 
 ## Features
 
