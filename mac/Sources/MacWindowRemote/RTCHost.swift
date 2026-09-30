@@ -153,6 +153,10 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
         parameters.degradationPreference = NSNumber(value: RTCDegradationPreference.maintainResolution.rawValue)
         for encoding in parameters.encodings {
             encoding.maxBitrateBps = 8_000_000
+            // A still window sends few frames, and WebRTC starts from a low bandwidth estimate,
+            // so the first frames stay blurry and are never refined; a floor keeps text readable
+            // on a large desktop screen (D50).
+            encoding.minBitrateBps = 1_500_000
             encoding.maxFramerate = 30
         }
         sender.parameters = parameters
