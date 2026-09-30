@@ -90,6 +90,10 @@ export class AudioOutput {
   setTrack(track) {
     for (const t of this.stream.getTracks()) this.stream.removeTrack(t);
     if (track) this.stream.addTrack(track);
+    // Desktop Chrome does not pick up a track added to a stream that is already the element's
+    // source, and its play() then never settles; re-assigning the source makes it load (D46).
+    this.element.srcObject = null;
+    this.element.srcObject = this.stream;
   }
 
   /// Starts playback. Inside a tap this unlocks the element; elsewhere it works only once
@@ -100,13 +104,26 @@ export class AudioOutput {
     }
     let p;
     try { p = this.element.play(); } catch { p = Promise.reject(new Error('play')); }
+    let settled = false;
     Promise.resolve(p).then(() => {
+      settled = true;
       this.unlocked = true;
       this.onChange();
-    }, () => {
+    }, (err) => {
+      settled = true;
+      if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') console.warn('audio play', err);
       this.unlocked = false;
       this.onChange();
     });
+    // A desktop browser the user has interacted with may leave play() pending until audio
+    // arrives; with sticky user activation playback is allowed, so the button must not stay
+    // stuck on "tap to enable" (D46).
+    setTimeout(() => {
+      if (!settled && !this.unlocked && globalThis.navigator?.userActivation?.hasBeenActive) {
+        this.unlocked = true;
+        this.onChange();
+      }
+    }, 800);
   }
 
   pause() {

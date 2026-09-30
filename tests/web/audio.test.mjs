@@ -57,3 +57,25 @@ test('a request that could not be sent does not hold back later replies', () => 
   assert.equal(m.onState({ mode: 'all' }), false);
   assert.equal(m.onState({ mode: 'off' }), true);
 });
+
+test('desktop: a play() that stays pending after a click does not leave 🔊 stuck (D46)', async () => {
+  const { AudioOutput } = await import('../../web/audio.js');
+  globalThis.MediaStream ??= class { constructor() { this.t = []; } getTracks() { return this.t; } addTrack(x) { this.t.push(x); } removeTrack(x) { this.t = this.t.filter((y) => y !== x); } };
+  const saved = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { userActivation: { hasBeenActive: true } }, configurable: true });
+  try {
+    const element = { srcObject: null, play: () => new Promise(() => {}), pause() {} };
+    const out = new AudioOutput(element);
+    let changes = 0;
+    out.onChange = () => { changes += 1; };
+    out.setTrack({ id: 'a' });
+    assert.equal(element.srcObject, out.stream);
+    out.play();
+    assert.equal(out.blocked('app'), true);
+    await new Promise((r) => setTimeout(r, 900));
+    assert.equal(out.blocked('app'), false);
+    assert.equal(changes, 1);
+  } finally {
+    if (saved) Object.defineProperty(globalThis, 'navigator', saved); else delete globalThis.navigator;
+  }
+});

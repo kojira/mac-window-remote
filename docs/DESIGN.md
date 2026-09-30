@@ -2177,3 +2177,11 @@ On a desktop browser (Chrome or Safari on a PC or another Mac) against the real 
 8. *Unit:* `point`/`mouse` decoding and channels; absolute cursor and stale points in the
    pipeline; web code→key mapping, text-vs-combo decision, IME composition, mouse button,
    click count, wheel, and stage→window translation.
+
+## 25. 🔊 on a desktop browser (Issue #21; amends D39)
+
+### D46. The audio element re-loads its stream on a new track, and a pending play() after a user gesture counts as unlocked
+
+Desktop Chrome left 🔊 on "tap to enable": a track added to the stream that is already the `<audio>` source was not picked up, and `play()` stayed pending, so the click only tried to unlock and never cycled. `setTrack` now re-assigns `srcObject`, and if `play()` has not settled after 0.8 s while the page has sticky user activation (`navigator.userActivation.hasBeenActive`), the element counts as unlocked. iOS is unchanged (its play() settles).
+
+Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and the Mac's sound plays; the iPhone behaves as before.
