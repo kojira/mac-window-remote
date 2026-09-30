@@ -81,15 +81,19 @@ actor SessionHub {
     let backend: any SessionBackend
     let owner: OwnerLogin
     let uploads: UploadStore
+    /// The Mac pasteboard whose new text goes to the device (D51); nil sends nothing.
+    let pasteboard: (any PasteboardReading)?
     /// One-time download tokens (D47), shared by the session that issues them and the HTTP route.
     private var downloads = DownloadTokenStore()
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
     init(owner: OwnerLogin, backend: any SessionBackend, uploads: UploadStore = .standard,
+         pasteboard: (any PasteboardReading)? = nil,
          onStatus: @escaping @Sendable (ConnectionStatus) -> Void = { _ in }) {
         self.owner = owner
         self.backend = backend
         self.uploads = uploads
+        self.pasteboard = pasteboard
         self.onStatus = onStatus
     }
 
@@ -144,7 +148,7 @@ actor SessionHub {
             return
         }
         var iterator = inbound.messages(maxSize: Server.maxMessageSize).makeAsyncIterator()
-        let session = Session(hub: self, backend: backend, outbound: outbound, uploads: uploads)
+        let session = Session(hub: self, backend: backend, outbound: outbound, uploads: uploads, pasteboard: pasteboard)
         await activate(session)
         log.info("session started")
         await session.send(.hello(permissions: backend.permissions()))
@@ -184,6 +188,9 @@ actor Session {
     private var capture: (any CaptureHandle)?
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
+    /// Polls the Mac pasteboard while this session is connected (D51).
+    private var clipboardTask: Task<Void, Never>?
+    private let pasteboard: (any PasteboardReading)?
     private var thumbsTask: Task<Void, Never>?
     /// The pending `app.open` (D40); a newer one, a view change, or teardown cancels it.
     private var appOpenTask: Task<Void, Never>?
@@ -215,11 +222,13 @@ actor Session {
     static let captureRetryInterval: Duration = .seconds(5)
     static let pingInterval: Duration = .seconds(10)
 
-    init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter, uploads: UploadStore) {
+    init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter, uploads: UploadStore,
+         pasteboard: (any PasteboardReading)? = nil) {
         self.hub = hub
         self.backend = backend
         self.outbound = outbound
         self.uploads = uploads
+        self.pasteboard = pasteboard
         let ref = WeakSession()
         input = InputPipeline(
             backend: backend,
@@ -254,6 +263,22 @@ actor Session {
                 try? await Task.sleep(for: Session.pingInterval)
                 guard !Task.isCancelled else { return }
                 await self?.send(.ping)
+            }
+        }
+        if let pasteboard { startClipboardWatch(pasteboard) }
+    }
+
+    /// D51: the clipboard at connect is the baseline; each later text copy goes to the device.
+    private func startClipboardWatch(_ pasteboard: any PasteboardReading) {
+        clipboardTask = Task.detached { [weak self] in
+            var watch = MacClipboardWatch(baseline: pasteboard)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: MacClipboardWatch.pollInterval)
+                guard !Task.isCancelled, let self else { return }
+                if let message = watch.poll(pasteboard) {
+                    log.info("mac clipboard sent")
+                    await self.send(message)
+                }
             }
         }
     }
@@ -866,6 +891,7 @@ actor Session {
         stopViewing()
         viewingWindowId = nil
         pingTask?.cancel()
+        clipboardTask?.cancel()
         thumbsTask?.cancel()
         appOpenTask?.cancel()
         searchTask?.cancel()

@@ -63,7 +63,7 @@ final class AppState: ObservableObject {
     func launch() {
         RTCHost.initialize()
         let backend = MacBackend(rtc: RTCHost(), onViewing: { _ in })
-        hub = SessionHub(owner: owner, backend: backend, onStatus: { status in
+        hub = SessionHub(owner: owner, backend: backend, pasteboard: SystemPasteboard.shared, onStatus: { status in
             Task { @MainActor in AppState.shared.connectionChanged(status) }
         })
         startServer()

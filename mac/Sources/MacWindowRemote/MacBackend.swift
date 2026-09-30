@@ -308,11 +308,8 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         case .paste(let text):
             // The raised window needs to be in front before ⌘V, as before a click (D25).
             if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
-            await MainActor.run {
-                let pasteboard = NSPasteboard.general
-                pasteboard.clearContents()
-                pasteboard.setString(text, forType: .string)
-            }
+            // Recorded as our own change, so D51 does not send it back to the device.
+            await MainActor.run { SystemPasteboard.shared.setForPaste(text) }
             await InputInjector.key("v", mods: [.cmd])
         }
         if case .scroll = action.kind { return nil }
