@@ -14,6 +14,7 @@
 
 ## What you can do with it
 
+- **Leave the MacBook at home.** No more carrying a laptop just in case: your Mac stays on your desk, and its apps come with you on your phone.
 - **Mix in the bath.** Sit back in the tub, turn Logic Pro's plug-in knobs and faders on your iPhone, and hear the result through it, not the Mac's speakers.
 - **Drive a desktop coding agent from anywhere.** Keep Cursor (or any desktop IDE / agent app) running on the Mac, and check its progress, answer its prompts, and type the next instruction from your phone.
 - **Babysit long jobs.** Watch a render, export, build, or download, and click “OK” on the dialog that would otherwise have stalled it — from another room or outside.
