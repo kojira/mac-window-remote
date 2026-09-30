@@ -2149,7 +2149,14 @@ On a real iPhone against the real Mac:
   the Dock's and Notification Center's transparent full-screen windows). A click on a child
   never raises W over it. A normal target is left alone when it is already the front normal
   window; a floating one when its app is frontmost and it is the focused window; otherwise it
-  is activated and AX-raised (D8). Each click logs the target id and focus outcome. Keys go to
+  is activated and AX-raised (D8). Each click logs the target id and focus outcome.
+  Title-bar buttons: Logic Pro draws them in separate tiny windows that ignore a synthetic
+  click, so before posting a left tap (`click`, not a drag or right click) the Mac hit-tests
+  with Accessibility (`AXUIElementCopyElementAtPosition` on the app, else system-wide keeping
+  only a result of the same pid; 0.3 s messaging timeout). When that element's or its parent's
+  `AXSubrole` is `AXCloseButton`, `AXMinimizeButton`, `AXZoomButton` or `AXFullScreenButton`, it
+  gets `kAXPressAction` instead of the click (logged `click ax-press subrole=… result=…`); a
+  failed press falls back to the click. Keys go to
   an adopted child while it is the front normal window, else W (D25).
   `menu.press` never switches the view; a window it opens appears in the composite.
 - **Limits.** Children on another display and a W spanning displays are not composited. The
@@ -2168,12 +2175,14 @@ On the real Mac and iPhone:
    the document; tapping the document keeps Settings shown; closing Settings returns the video
    to the document alone.
 3. Another TextEdit document that was already open is not shown.
+   Viewing Logic Pro, tapping the red close button of its Settings panel closes the panel.
 4. A window with no floating or new windows streams exactly as before.
 5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), overlays (in front,
    80 % containment, half-area cap, 8 pt minimum), no raise when P's window is topmost, adoption of new layer-0
    windows, kept until closed, pre-existing excluded, union and display clamping, no children
    ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
-   order past other apps' and system overlay windows (`ChildWindowsTests`).
+   order past other apps' and system overlay windows (`ChildWindowsTests`); title-bar button
+   subrole (own or parent) ⇒ AX press, else click (`TitleButtonPressTests`).
 
 ## 24. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
 
