@@ -2,6 +2,7 @@
 // The window arrives as a WebRTC video track (rtc.js); the overlay uses the video's intrinsic
 // size, and the cursor is in window-normalized coordinates, so no frame header is needed.
 import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
+import { clickCount, mouseButtonName, stageToWindow, wheelPixels } from './desktop.js';
 
 const MAX_ZOOM = 8;
 /// A thumb-sized swipe covers a useful distance of the window (D24).
@@ -11,13 +12,18 @@ const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
 const clamp1 = (x) => Math.min(Math.max(x, -1), 1);
 
 export class Viewer {
-  constructor({ stage, video, cursor, dragBadge, send, canInput }) {
+  /// onMouse(): a desktop mouse button was pressed on the stage (D45).
+  constructor({ stage, video, cursor, dragBadge, send, canInput, onMouse = () => {} }) {
     this.stage = stage;
     this.video = video;
     this.cursorEl = cursor;
     this.dragBadge = dragBadge;
     this.send = send;
     this.canInput = canInput;
+    this.onMouse = onMouse;
+    this.mouseMode = false; // the last pointer on the stage was a mouse (D45)
+    this.mouseHeld = null; // the button name a desktop mouse holds on the Mac
+    this.pendingPoint = null;
     this.size = null; // {width, height}: the video's intrinsic size, while a frame is shown
     this.scale = 1; // CSS px per video px
     this.tx = 0;
@@ -31,6 +37,13 @@ export class Viewer {
     stage.addEventListener('touchmove', (e) => this.onTouch(e, 'move'), { passive: false });
     stage.addEventListener('touchend', (e) => this.onTouch(e, 'end'), { passive: false });
     stage.addEventListener('touchcancel', (e) => this.onTouch(e, 'cancel'), { passive: false });
+    // D45: a desktop mouse. Touch stays on the touch handlers above.
+    stage.addEventListener('pointerdown', (e) => this.onPointer(e));
+    stage.addEventListener('pointermove', (e) => this.onPointer(e));
+    stage.addEventListener('mousedown', (e) => this.onMouseButton(e, true));
+    window.addEventListener('mouseup', (e) => this.onMouseButton(e, false));
+    stage.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    stage.addEventListener('contextmenu', (e) => e.preventDefault());
     video.addEventListener('resize', () => this.onVideoSize());
     video.addEventListener('loadedmetadata', () => this.onVideoSize());
     window.addEventListener('resize', () => this.relayout());
@@ -101,6 +114,8 @@ export class Viewer {
     this.dragBadge.hidden = true;
     this.pendingMove = null;
     this.pendingScroll = null;
+    this.pendingPoint = null;
+    this.mouseHeld = null;
     this.sentMoves = [];
   }
 
@@ -160,6 +175,7 @@ export class Viewer {
 
   onTouch(e, phase) {
     e.preventDefault();
+    this.mouseMode = false;
     const now = performance.now();
     const touches = this.stagePoints(e.touches);
     let intents;
@@ -231,6 +247,65 @@ export class Viewer {
     this.clampAndApply();
   }
 
+  // ---------- desktop mouse (D45) ----------
+
+  /// Where the video is on the stage, for stageToWindow.
+  videoRect() {
+    return { tx: this.tx, ty: this.ty, scale: this.scale, width: this.size.width, height: this.size.height };
+  }
+
+  /// A mouse event → window-normalized (u, v), or null outside the video. While a button is
+  /// held the point is clamped to the edge, so a drag continues.
+  mousePoint(e) {
+    if (!this.size) return null;
+    const r = this.stage.getBoundingClientRect();
+    return stageToWindow(e.clientX - r.left, e.clientY - r.top, this.videoRect(), this.mouseHeld !== null);
+  }
+
+  /// Mouse movement: the Mac cursor goes to the point under the mouse, at most once per frame.
+  onPointer(e) {
+    if (e.pointerType !== 'mouse') return;
+    if (!this.mouseMode) {
+      this.mouseMode = true;
+      this.placeCursor();
+    }
+    if (e.type === 'pointerdown') this.stage.setPointerCapture?.(e.pointerId);
+    if (!this.canInput()) return;
+    const p = this.mousePoint(e);
+    if (!p) return;
+    const first = !this.pendingPoint;
+    this.pendingPoint = p;
+    if (first) requestAnimationFrame(() => this.flushMotion());
+  }
+
+  /// Buttons use mouse events: their `detail` is the click count the Mac needs for a
+  /// double-click. Only one button is held at a time.
+  onMouseButton(e, down) {
+    if (!this.mouseMode) return;
+    const button = mouseButtonName(e.button);
+    if (down) {
+      e.preventDefault(); // no text selection or focus change; the key sink keeps focus
+      this.onMouse();
+    }
+    if (!button || !this.size || !this.canInput()) return;
+    if (down ? this.mouseHeld !== null : this.mouseHeld !== button) return;
+    const p = this.mousePoint(e);
+    if (!p) return;
+    this.pendingPoint = null;
+    this.flushMotion();
+    const msg = { t: 'mouse', button, state: down ? 'down' : 'up', clicks: clickCount(e.detail), seq: this.nextSeq++, u: p.u, v: p.v };
+    if (this.send(msg)) this.mouseHeld = down ? button : null;
+  }
+
+  /// The wheel scrolls the Mac window like the two-finger scroll (D26). Ctrl+wheel (a laptop
+  /// trackpad pinch) is swallowed so the page does not zoom.
+  onWheel(e) {
+    e.preventDefault();
+    if (e.ctrlKey || !this.size) return;
+    const { dx, dy } = wheelPixels(e, this.stage.clientHeight);
+    this.queueScroll(dx, dy);
+  }
+
   // ---------- relative cursor (D24) ----------
 
   resetCursor() {
@@ -269,8 +344,11 @@ export class Viewer {
   flushMotion() {
     const m = this.pendingMove;
     const s = this.pendingScroll;
+    const p = this.pendingPoint;
     this.pendingMove = null;
     this.pendingScroll = null;
+    this.pendingPoint = null;
+    if (p && this.size && this.canInput()) this.send({ t: 'point', seq: this.nextSeq++, u: p.u, v: p.v });
     if (m && this.cursorBase) {
       const move = { seq: this.nextSeq++, dx: clamp1(m.dx), dy: clamp1(m.dy) };
       if (this.send({ t: 'move', ...move })) {
@@ -294,8 +372,9 @@ export class Viewer {
     return { u, v };
   }
 
+  /// The arrow is the phone's pointer; a desktop mouse shows its own cursor (D45).
   placeCursor() {
-    if (!this.cursorBase || !this.size) { this.cursorEl.hidden = true; return; }
+    if (!this.cursorBase || !this.size || this.mouseMode) { this.cursorEl.hidden = true; return; }
     const { u, v } = this.predictedCursor();
     const x = this.tx + u * this.size.width * this.scale;
     const y = this.ty + v * this.size.height * this.scale;
