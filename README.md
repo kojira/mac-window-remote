@@ -2,6 +2,12 @@
 
 View and operate **one Mac window at a time** from an iPhone.
 
+<p>
+  <img src="docs/images/logic-mix.jpg" width="260" alt="Mixing in Logic Pro from an iPhone: the track area and a plug-in window">
+  <img src="docs/images/app-store.jpg" width="260" alt="A Mac window shown full-height on the iPhone">
+  <img src="docs/images/key-panel.jpg" width="260" alt="The key panel with esc, arrows, modifiers, ⌘F1, ⌘W, and space">
+</p>
+
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
 - The iPhone side is a web app (Safari / Home Screen) served by the Mac app, reachable only inside your Tailscale tailnet over HTTPS.
 - The phone works like a trackpad: one finger moves the Mac pointer (drawn as an arrow on the phone), tap clicks at the pointer, a two-finger tap right-clicks, two fingers scroll, a long-press starts a drag (tap to release), pinch zooms, and three fingers pan the zoomed view. Type with the iPhone keyboard (Japanese IME and dictation work, because only committed text is sent). ⌨︎ opens a key panel with esc, tab, arrows, F1–F12 (fn), and one-shot ⌘ ⌃ ⌥ ⇧ for shortcuts such as ⌘C and ⌃C, one-tap ⌘F1 and ⌘W (close the window), space and ⏎, and a ⋯ menu with 📋 Paste / 🖼 Image / 📎 File / ⌘Q (📎 uploads any file, up to 100 MiB, and pastes its Mac path); its text key opens the iPhone keyboard.
