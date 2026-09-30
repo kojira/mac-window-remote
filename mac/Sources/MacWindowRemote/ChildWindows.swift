@@ -31,24 +31,56 @@ enum ChildWindows {
     }
 
     /// The composition for viewed window `viewedId` of `pid` at `frame`. `preexisting` holds
-    /// every window id the app had when viewing started. A child is another on-screen window
-    /// of `pid`, at least 60 × 60 pt, on `frame`'s display, that is either at a floating layer
-    /// or a normal (layer 0) window not in `preexisting`. The captured area is the union of
-    /// `frame` and the children's frames, clamped to that display. When `frame` is not wholly
-    /// on one of `displays`, or there are no children, it is the plain window.
+    /// every window id the app had when viewing started. A standalone child is another
+    /// on-screen window of `pid`, at least 60 × 60 pt, on `frame`'s display, that is either at a
+    /// floating layer or a normal (layer 0) window not in `preexisting`. An overlay is another
+    /// window of `pid` at layer 0..<25, at least 8 × 8 pt, in front of the viewed window or a
+    /// standalone child with at least 80 % of its area inside that window's frame and at most
+    /// half its area (e.g. the title-bar buttons Logic Pro draws in their own small windows;
+    /// not a cascaded document window). The captured area is the
+    /// union of `frame` and the children's frames, clamped to that display. When `frame` is not
+    /// wholly on one of `displays`, or there are no children, it is the plain window.
     static func composition(viewedId: UInt32, pid: pid_t, frame: CGRect, preexisting: Set<UInt32>,
                             entries: [Entry], displays: [CGRect]) -> Composition {
         guard let display = displays.first(where: { $0.contains(frame) }) else { return .plain(frame) }
-        let children = entries.filter { e in
+        let standalone = entries.filter { e in
             let onDisplay = e.frame.intersection(display)
             let kind = floatingLayers.contains(e.layer) || (e.layer == 0 && !preexisting.contains(e.id))
             return e.id != viewedId && e.pid == pid && kind
                 && e.frame.width >= minimumSize && e.frame.height >= minimumSize
                 && !onDisplay.isNull && onDisplay.width > 0 && onDisplay.height > 0
         }
+        // The windows an overlay can sit on, with their front-to-back positions (the viewed
+        // window counts as behind everything when it is not in the list).
+        let standaloneIds = Set(standalone.map(\.id))
+        let hosts = [(entries.firstIndex { $0.id == viewedId } ?? entries.count, frame)]
+            + entries.indices.filter { standaloneIds.contains(entries[$0].id) }.map { ($0, entries[$0].frame) }
+        let children = entries.indices.filter { i in
+            let e = entries[i]
+            if standaloneIds.contains(e.id) { return true }
+            guard e.id != viewedId, e.pid == pid, overlayLayers.contains(e.layer),
+                  e.frame.width >= overlayMinimumSize, e.frame.height >= overlayMinimumSize else { return false }
+            return hosts.contains { index, host in index > i && isMostlyInside(e.frame, host) }
+        }.map { entries[$0] }
         guard !children.isEmpty else { return .plain(frame) }
         let union = children.reduce(frame) { $0.union($1.frame) }.intersection(display)
         return Composition(childIds: children.map(\.id), frame: frame, rect: union)
+    }
+
+    /// Layers and minimum size of overlay windows (D44).
+    static let overlayLayers = 0..<25
+    static let overlayMinimumSize: CGFloat = 8
+    /// The share of an overlay's area that must lie inside the window it sits on.
+    static let overlayContainment: CGFloat = 0.8
+    /// An overlay is at most this share of the window it sits on.
+    static let overlayMaximumShare: CGFloat = 0.5
+
+    private static func isMostlyInside(_ overlay: CGRect, _ host: CGRect) -> Bool {
+        let inside = overlay.intersection(host)
+        guard !inside.isNull else { return false }
+        let area = overlay.width * overlay.height
+        return inside.width * inside.height >= overlayContainment * area
+            && area <= overlayMaximumShare * host.width * host.height
     }
 
     enum Change: Equatable {
@@ -88,6 +120,30 @@ enum ChildWindows {
                             childIds: [UInt32], entries: [Entry]) -> Entry {
         hit(point, viewedId: viewedId, childIds: childIds, entries: entries)
             ?? Entry(id: viewedId, pid: pid, layer: 0, frame: viewedFrame)
+    }
+
+    /// App window layers (normal through utility panels). The Dock (20) and higher system
+    /// levels are left out: their transparent full-screen windows lie in front of every app
+    /// window without taking clicks.
+    static let appLayers = 0..<20
+
+    enum ClickFocus: Equatable {
+        /// The viewed app's own window (or overlay) is topmost at the point: the click is
+        /// posted as is, with no raise or re-ordering, so it handles key and front itself.
+        case post
+        /// Another app's window covers the point: raise this included window first (D25).
+        case raise(Entry)
+    }
+
+    /// What to do before a click at `point` (D44): `post` when the frontmost app-layer window
+    /// containing the point belongs to `pid`; otherwise `raise` the `focusTarget`.
+    static func clickFocus(at point: CGPoint, viewedId: UInt32, viewedFrame: CGRect, pid: pid_t,
+                           childIds: [UInt32], entries: [Entry]) -> ClickFocus {
+        if let top = entries.first(where: { appLayers.contains($0.layer) && $0.frame.contains(point) }), top.pid == pid {
+            return .post
+        }
+        return .raise(focusTarget(at: point, viewedId: viewedId, viewedFrame: viewedFrame, pid: pid,
+                                  childIds: childIds, entries: entries))
     }
 
     /// The window keys, text, and menu items go to (D25, D44): an adopted normal child that is

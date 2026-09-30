@@ -2129,13 +2129,20 @@ On a real iPhone against the real Mac:
   id did not exist when viewing W started. Those adopted windows stay included while open, even
   behind W. P's other windows that already existed are not included. Children must touch W's
   display.
+  Overlays: P's windows at layer 0..<25, at least 8 × 8 pt, in front of W or an included
+  window with ≥ 80 % of their area inside its frame and at most half its area, are included at
+  any size (Logic Pro draws title-bar buttons as separate 66 × 20 windows over each window).
 - **Capture.** With children, the stream uses `SCContentFilter(display:including:)` with W and
   the children, `sourceRect` = union of W and the children's frames clamped to W's display.
   The window list is polled every 0.5 s; a changed child set or area rebuilds the filter
   (`updateContentFilter` + `updateConfiguration`). Without children, the stream is the plain
   window capture exactly as before (D4).
 - **Input.** The phone's normalized cursor maps across the composite area, so a tap on a child
-  lands at its real screen position. A click focuses the included window under it: the first
+  lands at its real screen position. When the frontmost window at the point (layers 0..<20,
+  all apps) is P's, the click is posted with no AX raise or re-ordering; P is only activated
+  (without raising windows) if it is not frontmost, so the click itself makes its window key
+  and front, and an overlay stays clickable. When another app's window covers the point, the
+  click focuses the included window under it: the first
   of W and the children containing the point in the front-to-back on-screen window list
   (`CGWindowListCopyWindowInfo(.optionOnScreenOnly)`), skipping every other window (other apps,
   the Dock's and Notification Center's transparent full-screen windows). A click on a child
@@ -2161,7 +2168,8 @@ On the real Mac and iPhone:
    to the document alone.
 3. Another TextEdit document that was already open is not shown.
 4. A window with no floating or new windows streams exactly as before.
-5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), adoption of new layer-0
+5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), overlays (in front,
+   80 % containment, half-area cap, 8 pt minimum), no raise when P's window is topmost, adoption of new layer-0
    windows, kept until closed, pre-existing excluded, union and display clamping, no children
    ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
    order past other apps' and system overlay windows (`ChildWindowsTests`).

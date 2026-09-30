@@ -32,10 +32,33 @@ import Testing
             Self.e(3, layer: 101, 200, 200),         // pop-up menu
             Self.e(4, layer: -20, 200, 200),         // below normal windows
             Self.e(5, pid: 30, 200, 200),            // another app's floating panel
-            Self.e(6, 200, 200, 40, 300),            // a thin strip under 60 pt
+            Self.e(6, 1000, 200, 40, 300),           // a thin strip under 60 pt, not over W
             Self.e(1, layer: 0, 100, 100, 800, 600), // the viewed window itself
         ])
         #expect(c == .plain(Self.viewed))
+    }
+
+    @Test func titleBarButtonOverlaysInFrontOfIncludedWindowsAreIncluded() {
+        // As Logic Pro: the buttons are small same-app windows over each window's top-left.
+        let c = compose([Self.e(13, 410, 402, 66, 20),                  // over the Settings panel
+                         Self.e(5, 400, 400, 450, 250),                 // Settings panel
+                         Self.e(14, layer: 0, 110, 104, 66, 20),        // over the viewed window
+                         Self.e(1, layer: 0, 100, 100, 800, 600)], preexisting: [1, 14])
+        #expect(c.childIds == [13, 5, 14])
+    }
+
+    @Test func overlaysNeedContainmentBeingInFrontAndEightPoints() {
+        let c = compose([
+            Self.e(20, pid: 30, 110, 104, 66, 20),         // another app's
+            Self.e(21, 110, 104, 6, 20),                   // under 8 pt
+            Self.e(22, 90, 104, 66, 20),                   // 10 of 66 pt outside: 85 % inside
+            Self.e(23, 70, 104, 66, 20),                   // 30 of 66 pt outside: 55 % inside
+            Self.e(24, layer: 25, 110, 104, 66, 20),       // menu level
+            Self.e(26, layer: 0, 120, 120, 800, 580),      // a pre-existing cascaded document
+            Self.e(1, layer: 0, 100, 100, 800, 600),
+            Self.e(25, layer: 0, 120, 104, 66, 20),        // behind the viewed window
+        ], preexisting: [1, 25, 26])
+        #expect(c.childIds == [22])
     }
 
     @Test func noChildrenKeepsThePlainWindow() {
@@ -142,6 +165,30 @@ import Testing
         let entries = [Self.e(1, layer: 0, 100, 100, 800, 600), Self.e(8, layer: 0, 300, 300, 800, 300)]
         #expect(target(400, 400, [8], entries) == 1)   // W is in front there
         #expect(target(1000, 400, [8], entries) == 8)  // only the child is there
+    }
+
+    func clickFocus(_ x: CGFloat, _ y: CGFloat, _ ids: [UInt32], _ entries: [E]) -> ChildWindows.ClickFocus {
+        ChildWindows.clickFocus(at: CGPoint(x: x, y: y), viewedId: 1, viewedFrame: Self.viewed, pid: 20,
+                                childIds: ids, entries: entries)
+    }
+
+    @Test func aClickOnTheAppsOwnTopmostWindowIsPostedWithoutRaising() {
+        let entries = [Self.e(134, pid: 40, layer: 21, 0, 0, 1512, 982),  // Notification Center
+                       Self.e(28, pid: 41, layer: 20, 0, 0, 1512, 982),   // Dock
+                       Self.e(13, 410, 402, 66, 20),                      // close-button overlay
+                       Self.e(5, 400, 400, 450, 250),                     // Settings panel
+                       Self.e(1, layer: 0, 100, 100, 800, 600)]
+        #expect(clickFocus(420, 410, [13, 5], entries) == .post)          // on the overlay
+        #expect(clickFocus(600, 500, [13, 5], entries) == .post)          // on the panel
+        #expect(clickFocus(150, 150, [13, 5], entries) == .post)          // on the viewed window
+    }
+
+    @Test func aClickUnderAnotherAppsWindowRaisesTheIncludedWindowUnderIt() {
+        let entries = [Self.e(9, pid: 30, layer: 0, 500, 450, 300, 200),  // another app's window
+                       Self.e(5, 400, 400, 450, 250),
+                       Self.e(1, layer: 0, 100, 100, 800, 600)]
+        #expect(clickFocus(600, 500, [5], entries) == .raise(Self.e(5, 400, 400, 450, 250)))
+        #expect(clickFocus(150, 150, [5], entries) == .post)
     }
 
     @Test func keysGoToAnAdoptedWindowOnlyWhileItIsTheFrontNormalWindow() {

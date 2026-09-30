@@ -7,6 +7,18 @@ enum WindowFocuser {
     enum Outcome: String {
         case alreadyFront = "already_front"
         case raised
+        /// Only the app was activated; no window was raised (D44).
+        case activated
+    }
+
+    /// Before a click that lands on the app's own topmost window (D44): activates the app,
+    /// without raising any window, only when it is not the frontmost app. The click itself
+    /// makes the window key and front.
+    @MainActor
+    static func activateApp(pid: pid_t) -> Outcome {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return .alreadyFront }
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+        return .activated
     }
 
     /// `layer` is the window's CG layer. A normal window (0) is in front when it is the

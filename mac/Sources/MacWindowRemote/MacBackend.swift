@@ -217,19 +217,23 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             return nil
         }
         // Everything else needs the window in front: raise once if it is not (D25). With child
-        // windows, a click focuses the included window under it (never raising the viewed
-        // window over a child), and keys go to an adopted child in front (D44).
+        // windows, a click on the app's own topmost window is posted without any raise; one
+        // under another app's window focuses the included window under it (never raising the
+        // viewed window over a child), and keys go to an adopted child in front (D44).
         var focus = WindowFocuser.Outcome.alreadyFront
         if case .dragEnd = action.kind {} else {
-            var target = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
+            var target: ChildWindows.Entry? = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
             var isClick = false
             if let composite {
                 let entries = ChildWindows.onScreenEntries()
                 switch action.kind {
                 case .click, .rightClick, .dragStart:
                     isClick = true
-                    target = ChildWindows.focusTarget(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
-                                                      pid: pid, childIds: composite.childIds, entries: entries)
+                    switch ChildWindows.clickFocus(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
+                                                   pid: pid, childIds: composite.childIds, entries: entries) {
+                    case .post: target = nil
+                    case .raise(let entry): target = entry
+                    }
                 default:
                     let id = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
                                                     entries: entries)
@@ -238,16 +242,21 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
                     }
                 }
             }
-            focus = WindowFocuser.focus(windowId: target.id, pid: pid, bounds: target.frame, layer: target.layer)
+            if let target {
+                focus = WindowFocuser.focus(windowId: target.id, pid: pid, bounds: target.frame, layer: target.layer)
+            } else {
+                focus = await MainActor.run { WindowFocuser.activateApp(pid: pid) }
+            }
             if isClick {
-                log.notice("click target id=\(target.id, privacy: .public) viewed=\(action.windowId, privacy: .public) layer=\(target.layer, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
+                let targetId = target.map { String($0.id) } ?? "topmost"
+                log.notice("click target id=\(targetId, privacy: .public) viewed=\(action.windowId, privacy: .public) layer=\(target?.layer ?? -1, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
             }
         }
         switch action.kind {
         case .move:
             break
         case .click, .rightClick, .dragStart:
-            if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+            if focus != .alreadyFront { try? await Task.sleep(for: Self.clickAfterRaise) }
             switch action.kind {
             case .click:
                 let count = clickCounter.register(at: p, time: ProcessInfo.processInfo.systemUptime,
