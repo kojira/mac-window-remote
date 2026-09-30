@@ -3,9 +3,9 @@
 View and operate **one Mac window at a time** from an iPhone.
 
 <p>
-  <img src="docs/images/logic-mix.jpg" width="260" alt="Mixing in Logic Pro from an iPhone: the track area and a plug-in window">
-  <img src="docs/images/app-store.jpg" width="260" alt="A Mac window shown full-height on the iPhone">
-  <img src="docs/images/key-panel.jpg" width="260" alt="The key panel with esc, arrows, modifiers, ⌘F1, ⌘W, and space">
+  <img src="docs/images/logic-mix.webp" width="260" alt="Mixing in Logic Pro from an iPhone: the track area and a plug-in window">
+  <img src="docs/images/app-store.webp" width="260" alt="A Mac window shown full-height on the iPhone">
+  <img src="docs/images/key-panel.webp" width="260" alt="The key panel with esc, arrows, modifiers, ⌘F1, ⌘W, and space">
 </p>
 
 - A resident macOS menu bar app captures a single selected window (ScreenCaptureKit), streams it to the phone as H.264 video over WebRTC, and injects clicks/keys (CGEvent).
