@@ -221,13 +221,15 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         // under another app's window focuses the included window under it (never raising the
         // viewed window over a child), and keys go to an adopted child in front (D44).
         var focus = WindowFocuser.Outcome.alreadyFront
-        if case .dragEnd = action.kind {} else {
+        switch action.kind {
+        case .dragEnd, .mouseButton(_, false, _): break
+        default:
             var target: ChildWindows.Entry? = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
             var isClick = false
             if let composite {
                 let entries = ChildWindows.onScreenEntries()
                 switch action.kind {
-                case .click, .rightClick, .dragStart:
+                case .click, .rightClick, .dragStart, .mouseButton(_, true, _):
                     isClick = true
                     switch ChildWindows.clickFocus(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
                                                    pid: pid, childIds: composite.childIds, entries: entries) {
@@ -271,6 +273,20 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             }
         case .dragEnd:
             await InputInjector.dragEnd(at: p)
+        case .mouseButton(let button, let down, let clicks):
+            // D45: the browser counts clicks, so the Mac's own counter restarts.
+            clickCounter.reset()
+            let cgButton: CGMouseButton = switch button {
+            case .left: .left
+            case .right: .right
+            case .middle: .center
+            }
+            if down {
+                if focus != .alreadyFront { try? await Task.sleep(for: Self.clickAfterRaise) }
+                await InputInjector.buttonDown(cgButton, at: p, clickState: clicks)
+            } else {
+                await InputInjector.buttonUp(cgButton, at: p, clickState: clicks)
+            }
         case .scroll(let du, let dv):
             await InputInjector.scroll(at: p, dx: du * bounds.width, dy: dv * bounds.height)
         case .text(let text):

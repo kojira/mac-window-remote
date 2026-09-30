@@ -2,11 +2,13 @@
 import { Viewer } from './viewer.js';
 import { VideoLink } from './rtc.js';
 import { TextInput } from './input.js';
+import { DesktopKeyboard } from './desktop.js';
 import { SlotBar } from './slotbar.js';
 import { decodeViewSwitched } from './slots.js';
 import { ModifierState } from './modifiers.js';
 import { KeyPanel } from './keypanel.js';
 import { MenuSheet, decodeMenu } from './appmenu.js';
+import { FileSheet, startDownload } from './files.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
@@ -57,7 +59,7 @@ $('denied-retry').addEventListener('click', () => {
 function show(name) {
   screen = name;
   for (const [k, el] of Object.entries(screens)) el.hidden = k !== name;
-  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); closePasteSheet(); menuSheet.close(); }
+  if (name !== 'viewer') { keyPanel.close(); textInput.blur(); closePasteSheet(); menuSheet.close(); fileSheet.close(); desktopKeys.blur(); }
   renderFitWindow();
 }
 
@@ -150,6 +152,7 @@ function enterViewer(w) {
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify({ id: w.id, app: w.app, title: w.title }));
   viewer.clear();
   show('viewer');
+  focusKeySink();
   slotBar.render();
   renderFitWindow();
   viewMessage('');
@@ -549,8 +552,18 @@ function onMessage(msg) {
     case 'menu.pressed':
       pendingMenuPresses.delete(msg.id);
       break;
+    case 'files':
+      fileSheet.onFiles(msg);
+      break;
+    case 'files.found':
+      fileSheet.onFound(msg);
+      break;
+    case 'download.ready':
+      fileSheet.onReady(msg);
+      break;
     case 'error':
       if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
+      else if (fileSheet.onError(msg)) break;
       else if (onMenuError(msg)) break;
       else if (!onAppOpenError(msg)) onError(msg);
       break;
@@ -899,6 +912,7 @@ const viewer = new Viewer({
   dragBadge: $('drag-badge'),
   send: sendInput,
   canInput: () => screen === 'viewer' && authed && link.canSend(),
+  onMouse: () => { mouseUsed = true; textInput.blur(); focusKeySink(); },
 });
 $('fit').addEventListener('click', () => viewer.fit());
 
@@ -928,10 +942,46 @@ const keyPanel = new KeyPanel({
   textInput,
   sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
   onLayout: (change) => viewer.keepZoom(change),
-  onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile }[action]?.()),
+  onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile, download: openFiles }[action]?.()),
 });
 
 const menuSheet = new MenuSheet({ root: $('menu-sheet'), onPress: pressMenuItem });
+
+// ⬇︎ Download (D47): browse and search the Mac's files, then save the selection.
+const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload });
+
+function openFiles() {
+  keyPanel.close();
+  textInput.blur();
+  fileSheet.open();
+}
+
+// ---------- desktop keyboard (D45) ----------
+
+/// A mouse was pressed on the stage; with a fine pointer, this is a desktop browser.
+let mouseUsed = false;
+const finePointer = window.matchMedia?.('(pointer: fine)');
+const isDesktop = () => mouseUsed || !!finePointer?.matches;
+
+/// Physical keys go to the Mac while the viewer is shown and no sheet, menu, or text field is
+/// in use. The iPhone never gets here: its pointer is coarse and it sends no mouse events.
+const desktopKeys = new DesktopKeyboard({
+  sink: $('key-sink'),
+  isActive: () => screen === 'viewer' && isDesktop() && $('paste-sheet').hidden && $('menu-sheet').hidden && $('files-sheet').hidden
+    && $('slot-menu').hidden && !keyPanel.isMenuOpen() && !textInput.isFocused(),
+  send: sendInput,
+});
+
+function focusKeySink() {
+  if (desktopKeys.isActive()) desktopKeys.focus();
+}
+
+// A click on a bottom-bar or panel button gives focus back to the key sink, so an IME keeps
+// composing there.
+$('viewer').addEventListener('click', (e) => {
+  if (e.target.closest?.('#stage, #text')) return;
+  setTimeout(focusKeySink, 0);
+});
 
 setListTab(listTab);
 // Earlier versions paired with a stored secret; it is no longer used.

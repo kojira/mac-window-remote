@@ -8,6 +8,8 @@ View and operate **one Mac window at a time** from an iPhone.
 - The list screen (‹) has **Windows | Apps**: Apps shows the Mac Dock's apps (and other running apps) as icons; tap one to launch or bring it forward and view its front window.
 - ☰ in the bottom bar lists the viewed app's menu bar menus (without the Apple menu) as a drill-down sheet; tap an item to run it on the Mac. Menus that an app fills only when opened show up empty.
 - The viewed app's floating windows (plug-in editors, palettes) and windows it opens while you view it (Settings, dialogs) appear in the video next to the viewed window, and taps reach them.
+- From a **desktop browser** the mouse points directly (the Mac cursor follows it; click, double-click, right-click, drag, wheel) and the physical keyboard types into the window (shortcuts by key position, text in your layout, IME commits). Keys the browser or OS keeps, such as ⌘Tab, ⌘Q, and ⌘W, cannot be captured; use the key panel for them.
+- ⋯ → **⬇︎ Download** browses the whole Mac filesystem (quick places, breadcrumbs, hidden-files toggle, file-name search) and saves the checked items to the iPhone or PC: one file as is, several items or a folder as one zip (up to 2 GB). It only reads files.
 - 🔊 in the bottom bar plays the Mac's sound on the iPhone instead of the Mac's speakers: **App** (the viewed window's app) or **All** (the whole Mac); 🔇 **Off** gives the sound back to the Mac. Needs macOS 14.2 or later.
 
 ## Status

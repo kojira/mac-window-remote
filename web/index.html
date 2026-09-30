@@ -38,6 +38,7 @@
 
   <section id="viewer" class="screen" hidden>
     <div id="stage"><video id="video" class="waiting" playsinline muted autoplay disablepictureinpicture></video><div id="cursor" hidden></div></div>
+    <textarea id="key-sink" tabindex="-1" aria-hidden="true" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
     <audio id="audio" playsinline></audio>
     <div id="drag-badge" hidden>Dragging — tap to release</div>
     <div id="viewer-overlay" class="overlay" hidden><span id="viewer-overlay-text"></span><button id="retry" type="button" hidden>Retry</button></div>
@@ -67,6 +68,7 @@
       </div>
     </div>
     <div id="menu-sheet" hidden></div>
+    <div id="files-sheet" hidden></div>
     <div id="slot-menu" hidden>
       <div class="sheet">
         <button type="button" data-act="assign">Assign current window</button>

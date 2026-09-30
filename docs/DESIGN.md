@@ -6,7 +6,8 @@ trackpad-style input), which is implemented and awaits acceptance on a real iPho
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
 §16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.
-§19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab.** Sections marked *Superseded by §11* describe
+§19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab. §23 (D45) adds
+a desktop browser's mouse and keyboard.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -2173,3 +2174,115 @@ On the real Mac and iPhone:
    windows, kept until closed, pre-existing excluded, union and display clamping, no children
    ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
    order past other apps' and system overlay windows (`ChildWindowsTests`).
+
+## 24. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
+
+### D45. Mouse and keyboard on a PC browser; the iPhone is unchanged
+- **Why (user request):** operate the Mac window from a desktop browser as directly as sitting
+  at the Mac. Touch input (D23, D24) and the iPhone text field (D10, D34) do not change.
+- **Mouse (`pointerType === 'mouse'`).** Absolute mapping: the point under the mouse on the
+  video is the window point. Moves go at most once per animation frame on `motion` as
+  `{"t":"point","seq","u","v"}` (u, v in [0, 1]; `seq` shares the `move` counter and a point
+  older than the last applied `seq` is dropped, since `motion` is unordered). Buttons go on
+  `control` as `{"t":"mouse","button":"left|right|middle","state":"down|up","clicks":1–3,
+  "seq","u","v"}`: the Mac moves the cursor there and posts the button's down or up with
+  `clicks` as the click state (a double-click is the browser's `detail` 2, so the Mac sees
+  clickCount 2). While a button is held the Mac posts the button's dragged events, and the
+  point is clamped to the window edge. One button at a time; a held button is released on
+  disconnect or window change as before (D26). The wheel sends the existing `scroll`
+  (pixel deltas; line mode ×16 px, page mode × the stage height; both axes; ctrl+wheel, a
+  trackpad pinch, is swallowed). The context menu is suppressed. The phone's arrow overlay
+  is not drawn for a mouse; the browser's own cursor stays visible because the stream does
+  not render the Mac cursor (`showsCursor = false`). No pointer lock.
+- **Keyboard.** Active when the viewer is shown on a desktop (a mouse was pressed on the
+  stage, or `(pointer: fine)` matches) and no sheet, ⋯ menu, slot menu, or text field is in
+  use. Keys arrive in a hidden, focused textarea (`#key-sink`) so an IME can compose. A
+  keydown with no modifier but shift (or with AltGr) whose `key` is one printable character is
+  sent as `text` (the user's layout is respected); otherwise `KeyboardEvent.code` is mapped by
+  US position to a §4.3 key name and sent as `key` with `mods` from metaKey→cmd, ctrlKey→ctrl,
+  altKey→opt, shiftKey→shift (D38 Fn/NumPad flags apply on the Mac as for the key panel).
+  Forwarded keys, and their keyups, are `preventDefault`ed. Modifier keys alone, unmapped
+  keys, dead keys, and anything during IME composition are not forwarded; `compositionend`
+  sends the committed text through `text`. Clicking a bottom-bar or panel button returns focus
+  to the key sink.
+- **Limits.** Keys the browser or OS keeps are never seen by the page (e.g. ⌘Tab, ⌘Q, ⌘W, ⌘T,
+  ⌘N and ⌘L in most browsers, Ctrl+Alt+Del, the Windows key); use the key panel's ⌘Tab / ⌘F1 /
+  ⌘Q for those. Option+letter goes as ⌥+key (the Mac's own layout decides the character), and
+  keys beyond §4.3 (F13+, media keys, Intl keys) are ignored. Keys do not repeat faster than the
+  browser's auto-repeat, and each is one combo (down and up) on the Mac, so holding a key on
+  the Mac (e.g. a game) is not possible.
+- **Source changes:** `Protocol.swift` (`point`, `mouse`), `Session.swift`,
+  `InputPipeline.swift` (`submitPoint`, `submitMouse`), `InputInjector.swift` (held button of
+  any kind), `MacBackend.swift`; `web/desktop.js`, `web/viewer.js`, `web/app.js`, `web/rtc.js`,
+  `web/index.html`, `web/style.css`.
+
+### D45 acceptance criteria
+On a desktop browser (Chrome or Safari on a PC or another Mac) against the real Mac:
+1. Moving the mouse over the video moves the Mac cursor to the same spot in the window;
+   no arrow overlay is drawn.
+2. Click, double-click (selects a word in TextEdit), right-click (opens the context menu,
+   not the browser's), and drag (selects text or moves a window item) work where the mouse is.
+3. The wheel scrolls the window in both directions and axes.
+4. Typing letters, digits, and symbols (on the user's layout), Enter, Backspace, Tab, Esc,
+   arrows, Home/End/PageUp/PageDown, F1–F12 goes to the window; ⌘C/⌘V/⌘Z and ⌃/⌥ combos work.
+5. With a Japanese IME, composing shows candidates in the browser and only the committed text
+   arrives on the Mac.
+6. The ⋯ menu, ☰ sheet, paste sheet, and the text field receive keys themselves; nothing is
+   forwarded while they are in use. The bottom bar and key panel work with the mouse.
+7. On the iPhone, the trackpad, overlay arrow, text field, and key panel behave as before.
+8. *Unit:* `point`/`mouse` decoding and channels; absolute cursor and stale points in the
+   pipeline; web code→key mapping, text-vs-combo decision, IME composition, mouse button,
+   click count, wheel, and stage→window translation.
+
+## 25. 🔊 on a desktop browser (Issue #21; amends D39)
+
+### D46. The audio element re-loads its stream on a new track, and a pending play() after a user gesture counts as unlocked
+
+Desktop Chrome left 🔊 on "tap to enable": a track added to the stream that is already the `<audio>` source was not picked up, and `play()` stayed pending, so the click only tried to unlock and never cycled. `setTrack` now re-assigns `srcObject`, and if `play()` has not settled after 0.8 s while the page has sticky user activation (`navigator.userActivation.hasBeenActive`), the element counts as unlocked. iOS is unchanged (its play() settles).
+
+Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and the Mac's sound plays; the iPhone behaves as before.
+
+## 26. Download files from the Mac (user decision, Issue #23)
+
+### D47. ⬇︎ Download in the ⋯ menu: a file browser, name search, and one-time download links
+- **Entry.** ⋯ → ⬇︎ Download (after 📎 File) opens a full-height sheet (touch and mouse). It starts
+  at the home folder (then where it was last). Quick places: Home, Desktop, Documents,
+  Downloads, Computer (`/`), and each `/Volumes/*` except the boot-disk link. A breadcrumb
+  header and ‹ go up. Rows: icon, name, size, date; folders first, then name (localized,
+  case-insensitive). A Hidden toggle shows dot-files. An unreadable folder shows "No access".
+- **Listing and search over the socket.** `{"t":"files.list","id","path","hidden"}` →
+  `{"t":"files","id","path","entries","total","truncated","places"}`; at most 5,000 entries,
+  with "Showing the first N of M". `{"t":"files.search","id","base","q","hidden"}` →
+  `{"t":"files.found","id","base","entries","truncated","timedOut"}`: a file-NAME
+  case-insensitive substring match. "Search in:" defaults to the current folder, is editable
+  (`~` expands), and has quick picks "current folder" and "/". The walk skips package contents,
+  hidden entries unless shown, and, from `/`, `/System`, `/private`, and `/dev`. It stops at 500
+  matches or about 5 s, and a newer search cancels it. Results show their parent path and can
+  be selected.
+- **Download.** A checkbox per row (a tap on a file row toggles it too) and a sticky bar
+  "N selected · size" with Download. `{"t":"download.request","id","paths"}` checks each path on
+  the Mac (absolute, standardized, must exist and be readable; `/` itself is refused) and
+  pre-scans folders. Over 2 GB (file sizes before compression) or 100,000 files → `too_large`
+  with a clear message, before anything is sent. Otherwise → `{"t":"download.ready","id","url",
+  "name","size"}` with `url` = `/download/<token>`: 48 hex characters, valid once, for 60 s,
+  for exactly that path set. The page navigates a hidden `<a download>` to it, so iOS Safari
+  and desktop browsers save the file. The GET goes through the owner check (D32).
+- **Response.** One file → as is (`application/octet-stream`, `Content-Length`). Several items or
+  any folder → one zip streamed while it is built: relative paths under each selected item's
+  name, ZIP64 when sizes or offsets need it, STORE for already-compressed types, DEFLATE
+  otherwise. Name: `<folder>.zip`, `<shared parent>.zip`, or `download-<yyyyMMdd-HHmmss>.zip`.
+  `Content-Disposition: attachment; filename="<ASCII fallback>"; filename*=UTF-8''<name>`.
+- **Read only.** Nothing is created, changed, or deleted on the Mac.
+- **Limits.** Folders are zipped with hidden files; symlinked folders inside are not entered;
+  unreadable items inside a folder are left out. Privacy-protected folders (TCC) show "No
+  access" unless the app has been given access. A file that changes during the download is sent
+  as read.
+
+### D47 acceptance criteria
+- ⋯ shows ⬇︎ Download after 📎 File; it opens at home with the quick places.
+- Folders open on tap; ‹ and the breadcrumbs go up; Hidden shows dot-files.
+- Checking one file and Download saves it with its name; checking a folder or several items
+  saves one zip that `unzip -t` accepts.
+- A selection over 2 GB shows the limit message and downloads nothing.
+- Search finds names under the current folder, `/`, or a typed `~/…` path within about 5 s.
+- A used or expired `/download/…` link answers 404.

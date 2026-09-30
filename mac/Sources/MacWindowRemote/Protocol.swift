@@ -44,6 +44,12 @@ enum ErrorCode: String, Codable {
     case menuDisabled = "menu_disabled"
     /// D43: AXPress failed.
     case menuFailed = "menu_failed"
+    /// D47: the path does not exist.
+    case notFound = "not_found"
+    /// D47: a folder was expected.
+    case notADirectory = "not_a_directory"
+    /// D47: permission or privacy (TCC) refusal.
+    case noAccess = "no_access"
     case `internal` = "internal"
 }
 
@@ -63,6 +69,11 @@ enum ClientMessage: Equatable {
     case move(seq: Int, dx: Double, dy: Double)
     /// Scroll in window-normalized units (D26).
     case scroll(du: Double, dv: Double)
+    /// Absolute cursor position in window-normalized units, from a desktop mouse (D45). `seq`
+    /// shares the `move` counter; a point older than the last applied one is dropped.
+    case point(seq: Int, u: Double, v: Double)
+    /// A desktop mouse button going down or up at (u, v), with the browser's click count (D45).
+    case mouse(button: MouseButton, down: Bool, clicks: Int, seq: Int, u: Double, v: Double)
     case click
     case rightClick
     case drag(start: Bool)
@@ -83,6 +94,17 @@ enum ClientMessage: Equatable {
     case menuList
     /// Press the item `id` of listing `gen` (D43).
     case menuPress(id: String, gen: Int)
+    /// A folder listing (D47); `path` is absolute or starts with `~`.
+    case filesList(id: String, path: String, hidden: Bool)
+    /// File-name search under `base` (D47).
+    case filesSearch(id: String, base: String, query: String, hidden: Bool)
+    /// A one-time download URL for exactly these absolute paths (D47).
+    case downloadRequest(id: String, paths: [String])
+}
+
+/// A desktop mouse button (D45).
+enum MouseButton: String, Sendable, Equatable {
+    case left, right, middle
 }
 
 /// What Mac audio goes to the phone (D39). Not persisted on the Mac; the phone re-sends it.
@@ -132,6 +154,15 @@ extension ClientMessage {
         let mode: String?
         let id: String?
         let gen: Int?
+        let u: Double?
+        let v: Double?
+        let button: String?
+        let clicks: Int?
+        let path: String?
+        let hidden: Bool?
+        let base: String?
+        let q: String?
+        let paths: [String]?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -163,6 +194,22 @@ extension ClientMessage {
             guard x.isFinite, abs(x) <= 1 else { throw ProtocolError.invalidValue(name) }
             return x
         }
+        func sequence() throws -> Int {
+            let seq = try require(e.seq, "seq")
+            guard seq >= 0 else { throw ProtocolError.invalidValue("seq") }
+            return seq
+        }
+        // D45: an absolute position is finite and within [0, 1].
+        func position(_ value: Double?, _ name: String) throws -> Double {
+            let x = try require(value, name)
+            guard x.isFinite, (0...1).contains(x) else { throw ProtocolError.invalidValue(name) }
+            return x
+        }
+        func requestId() throws -> String {
+            let id = try require(e.id, "id")
+            guard !id.isEmpty, id.count <= 64 else { throw ProtocolError.invalidValue("id") }
+            return id
+        }
         switch e.t {
         case "windows.list":
             return .windowsList
@@ -186,6 +233,22 @@ extension ClientMessage {
             return .move(seq: seq, dx: try delta(e.dx, "dx"), dy: try delta(e.dy, "dy"))
         case "scroll":
             return .scroll(du: try delta(e.du, "du"), dv: try delta(e.dv, "dv"))
+        case "point":
+            return .point(seq: try sequence(), u: try position(e.u, "u"), v: try position(e.v, "v"))
+        case "mouse":
+            guard let button = MouseButton(rawValue: try require(e.button, "button")) else {
+                throw ProtocolError.invalidValue("button")
+            }
+            let down: Bool
+            switch try require(e.state, "state") {
+            case "down": down = true
+            case "up": down = false
+            default: throw ProtocolError.invalidValue("state")
+            }
+            let clicks = e.clicks ?? 1
+            guard (1...3).contains(clicks) else { throw ProtocolError.invalidValue("clicks") }
+            return .mouse(button: button, down: down, clicks: clicks, seq: try sequence(),
+                          u: try position(e.u, "u"), v: try position(e.v, "v"))
         case "click":
             return .click
         case "rightClick":
@@ -233,10 +296,32 @@ extension ClientMessage {
             let gen = try require(e.gen, "gen")
             guard gen > 0 else { throw ProtocolError.invalidValue("gen") }
             return .menuPress(id: id, gen: gen)
+        case "files.list":
+            let path = try require(e.path, "path")
+            guard !path.isEmpty, path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
+            return .filesList(id: try requestId(), path: path, hidden: e.hidden ?? false)
+        case "files.search":
+            let base = try require(e.base, "base")
+            let query = try require(e.q, "q")
+            guard !base.isEmpty, base.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("base") }
+            guard !query.trimmingCharacters(in: .whitespaces).isEmpty, query.count <= 255 else {
+                throw ProtocolError.invalidValue("q")
+            }
+            return .filesSearch(id: try requestId(), base: base, query: query, hidden: e.hidden ?? false)
+        case "download.request":
+            let paths = try require(e.paths, "paths")
+            guard !paths.isEmpty, paths.count <= DownloadPlanner.maxPaths,
+                  paths.allSatisfy({ $0.hasPrefix("/") && $0.utf8.count <= maxPathBytes }) else {
+                throw ProtocolError.invalidValue("paths")
+            }
+            return .downloadRequest(id: try requestId(), paths: paths)
         default:
             throw ProtocolError.unknownType(e.t)
         }
     }
+
+    /// Longest path accepted from the client (D47); macOS paths are at most 1024 bytes.
+    static let maxPathBytes = 4096
 
     /// The phone has three quick-switch slots (D33).
     static let maxThumbnailRequest = 3
@@ -244,10 +329,11 @@ extension ClientMessage {
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress:
+        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
+             .filesList, .filesSearch, .downloadRequest:
             return .socket
-        case .move, .scroll: return .motion
-        case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
+        case .move, .scroll, .point: return .motion
+        case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
         }
     }
 
@@ -261,6 +347,8 @@ extension ClientMessage {
         case .rtcIce: return "rtc.ice"
         case .move: return "move"
         case .scroll: return "scroll"
+        case .point: return "point"
+        case .mouse: return "mouse"
         case .click: return "click"
         case .rightClick: return "rightClick"
         case .drag: return "drag"
@@ -273,6 +361,9 @@ extension ClientMessage {
         case .appOpen: return "app.open"
         case .menuList: return "menu.list"
         case .menuPress: return "menu.press"
+        case .filesList: return "files.list"
+        case .filesSearch: return "files.search"
+        case .downloadRequest: return "download.request"
         }
     }
 }
@@ -396,6 +487,12 @@ enum ServerMessage {
     case menu(gen: Int, windowId: UInt32, listing: MenuListing)
     /// A `menu.press` succeeded (D43).
     case menuPressed(id: String)
+    /// A folder listing with the quick places (D47).
+    case files(id: String, listing: FileListing, places: [FilePlace])
+    /// File-name search results (D47).
+    case filesFound(id: String, result: FileSearchResult)
+    /// A one-time download URL (D47).
+    case downloadReady(id: String, url: String, name: String, size: Int64)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -417,6 +514,15 @@ enum ServerMessage {
         let t = "menu"; let gen: Int; let windowId: UInt32; let menus: [MenuNode]; let truncated: Bool
     }
     private struct MenuPressed: Encodable { let t = "menu.pressed"; let id: String }
+    private struct Files: Encodable {
+        let t = "files"; let id: String; let path: String; let entries: [FileEntry]; let total: Int
+        let truncated: Bool; let places: [FilePlace]
+    }
+    private struct Found: Encodable {
+        let t = "files.found"; let id: String; let base: String; let entries: [FileEntry]
+        let truncated: Bool; let timedOut: Bool
+    }
+    private struct Ready: Encodable { let t = "download.ready"; let id: String; let url: String; let name: String; let size: Int64 }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
@@ -468,6 +574,14 @@ enum ServerMessage {
             data = try? encoder.encode(Menu(gen: gen, windowId: windowId, menus: listing.menus, truncated: listing.truncated))
         case .menuPressed(let id):
             data = try? encoder.encode(MenuPressed(id: id))
+        case .files(let id, let listing, let places):
+            data = try? encoder.encode(Files(id: id, path: listing.path, entries: listing.entries, total: listing.total,
+                                             truncated: listing.truncated, places: places))
+        case .filesFound(let id, let result):
+            data = try? encoder.encode(Found(id: id, base: result.base, entries: result.entries,
+                                             truncated: result.truncated, timedOut: result.timedOut))
+        case .downloadReady(let id, let url, let name, let size):
+            data = try? encoder.encode(Ready(id: id, url: url, name: name, size: size))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

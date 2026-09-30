@@ -53,6 +53,10 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #cursor::before { content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 20px;
   background: #fff; clip-path: polygon(0 0, 0 100%, 30% 75%, 55% 100%, 70% 92%, 47% 68%, 100% 68%);
   filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); }
+/* D45: receives physical keys and IME on a desktop; kept on screen (IMEs place their candidate
+   window at it) but invisible and outside the stage's input. */
+#key-sink { position: absolute; left: 8px; bottom: calc(64px + env(safe-area-inset-bottom)); width: 1px; height: 1px;
+  opacity: 0; border: 0; padding: 0; resize: none; overflow: hidden; pointer-events: none; }
 #drag-badge { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 64px);
   background: rgba(10, 132, 255, 0.92); color: #fff; padding: 8px 14px; border-radius: 16px; font-size: 14px;
   pointer-events: none; }
@@ -161,6 +165,36 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .menu-row.disabled .menu-right { color: #555; }
 .menu-sep { height: 8px; background: #111; }
 .menu-message { padding: 16px; color: #aaa; }
+
+/* D47: ⬇︎ Download, a full-height file browser that reuses the menu sheet's panel. */
+#files-sheet { position: absolute; inset: 0; z-index: 7; background: rgba(0, 0, 0, 0.45); }
+.files-crumbs { flex: 1; min-width: 0; display: flex; overflow-x: auto; white-space: nowrap; gap: 2px; }
+.menu-header .files-crumb { width: auto; height: 36px; padding: 0 6px; font-size: 15px; color: #0a84ff; flex: none; }
+.menu-header .files-crumb:last-child { color: inherit; font-weight: 600; }
+.files-places { flex: none; display: flex; gap: 6px; overflow-x: auto; padding: 8px; border-bottom: 1px solid #2c2c2e; }
+.files-place { flex: none; padding: 6px 10px; font-size: 14px; border-radius: 14px; }
+.files-place.active { background: #0a84ff; }
+.files-search, .files-base { flex: none; display: flex; gap: 6px; align-items: center; padding: 6px 8px 0; }
+.files-base { padding-bottom: 6px; border-bottom: 1px solid #2c2c2e; font-size: 13px; color: #aaa; }
+.files-query, .files-base-input { flex: 1; min-width: 0; padding: 7px 8px; font-size: 16px; border-radius: 8px;
+  border: 1px solid #3a3a3c; background: #2c2c2e; color: inherit; }
+.files-base-input { padding: 5px 8px; }
+.files-go, .files-hidden, .files-pick { flex: none; padding: 6px 9px; font-size: 13px; }
+.files-hidden.active { background: #0a84ff; }
+.files-row { display: flex; align-items: center; border-bottom: 1px solid #2a2a2a; }
+.files-row.selected { background: #102a44; }
+.files-check { flex: none; width: 22px; height: 22px; margin: 0 4px 0 12px; }
+.files-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 4px 14px 4px 6px;
+  background: transparent; border-radius: 0; text-align: left; }
+.files-icon { flex: none; font-size: 20px; }
+.files-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.files-name, .files-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-meta { font-size: 12px; color: #8e8e93; }
+.files-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px calc(env(safe-area-inset-bottom) + 8px);
+  background: #2c2c2e; border-top: 1px solid #3a3a3c; }
+.files-summary { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-download { flex: none; padding: 8px 16px; background: #0a84ff; }
+.files-download:disabled { opacity: 0.5; }
 
 #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 56px);
   max-width: 90%; background: rgba(60, 60, 60, 0.95); padding: 10px 14px; border-radius: 10px; z-index: 10; font-size: 14px; }

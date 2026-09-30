@@ -37,6 +37,15 @@ enum Server {
                 headers: [.contentType: "image/png", .cacheControl: "private, max-age=86400"],
                 body: .init(byteBuffer: ByteBuffer(bytes: png)))
         }
+        // D47: a download prepared on the socket; each token works once, for a short time.
+        router.get("/download/:token") { _, context -> Response in
+            let token = context.parameters.get("token") ?? ""
+            guard let plan = await hub.takeDownload(token) else {
+                return Response(status: .notFound, headers: [.contentType: "text/plain; charset=utf-8"],
+                                body: .init(byteBuffer: ByteBuffer(string: "This download link has expired. Choose Download again.\n")))
+            }
+            return downloadResponse(plan)
+        }
         router.ws("/ws") { _, _ in
             .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
@@ -54,6 +63,51 @@ enum Server {
             configuration: .init(address: .hostname("127.0.0.1", port: port), serverName: nil),
             logger: logger)
     }
+}
+
+extension Server {
+    /// One file as is, or a zip streamed as it is built (D47). Read only.
+    static func downloadResponse(_ plan: DownloadPlan) -> Response {
+        var headers: HTTPFields = [
+            .contentDisposition: contentDisposition(fileName: plan.fileName),
+            .cacheControl: "no-store",
+        ]
+        switch plan {
+        case .file(let url, _, let size):
+            headers[.contentType] = "application/octet-stream"
+            return Response(status: .ok, headers: headers, body: ResponseBody(contentLength: Int(size)) { writer in
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                var remaining = Int(size)
+                while remaining > 0 {
+                    let chunk = try handle.read(upToCount: min(ZipStreamWriter.readChunk, remaining)) ?? Data()
+                    if chunk.isEmpty { break }
+                    remaining -= chunk.count
+                    try await writer.write(ByteBuffer(bytes: chunk))
+                }
+                // A file that shrank since the check is padded so the length stays right.
+                if remaining > 0 { try await writer.write(ByteBuffer(repeating: 0, count: remaining)) }
+                try await writer.finish(nil)
+            })
+        case .zip(_, let sources, _):
+            headers[.contentType] = "application/zip"
+            return Response(status: .ok, headers: headers, body: ResponseBody { writer in
+                let box = WriterBox(writer)
+                let zip = ZipStreamWriter { data in try await box.write(data) }
+                for source in sources { try await zip.add(source) }
+                try await zip.finish()
+                try await box.finish()
+            })
+        }
+    }
+}
+
+/// Lets the zip writer's sink write to the response (the writer is `inout` in the closure).
+private final class WriterBox: @unchecked Sendable {
+    var writer: any ResponseBodyWriter
+    init(_ writer: any ResponseBodyWriter) { self.writer = writer }
+    func write(_ data: Data) async throws { try await writer.write(ByteBuffer(bytes: data)) }
+    func finish() async throws { try await writer.finish(nil) }
 }
 
 /// 403 for HTTP requests that are not from the Mac owner (D32). `/ws` is let through: its

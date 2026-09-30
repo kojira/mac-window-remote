@@ -5,7 +5,9 @@ import Testing
 private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var kinds: [String] = []
+    private var actions: [InputAction] = []
     var performed: [String] { lock.withLock { kinds } }
+    var performedActions: [InputAction] { lock.withLock { actions } }
 
     func permissions() -> PermissionsStatus { PermissionsStatus(screenRecording: true, accessibility: true) }
     func listWindows() async throws -> [WindowItem] { [] }
@@ -13,7 +15,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     func perform(_ action: InputAction) async -> ErrorCode? {
         // Posting takes a moment, so later input arrives while a post is in flight.
         try? await Task.sleep(for: .milliseconds(2))
-        lock.withLock { kinds.append(action.kind.logName) }
+        lock.withLock { kinds.append(action.kind.logName); actions.append(action) }
         return nil
     }
     func focus(windowId: UInt32) async {}
@@ -48,6 +50,28 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(backend.performed.filter { $0 == "click" }.count == 20)
+        await pipeline.shutdown()
+    }
+
+    /// D45: a desktop mouse button goes down where the mouse is, and a point that arrives
+    /// after a newer one (the motion channel is unordered) does not move the cursor back.
+    @Test func desktopMouseUsesAbsolutePositions() async throws {
+        let backend = RecordingBackend()
+        let pipeline = InputPipeline(backend: backend, onError: { _ in }, onCursor: { _, _ in })
+        await pipeline.setTarget(1)
+        await pipeline.submitPoint(seq: 5, u: 0.2, v: 0.3)
+        await pipeline.submitPoint(seq: 4, u: 0.9, v: 0.9)
+        await pipeline.submitMouse(.left, down: true, clicks: 2, seq: 6, u: 0.25, v: 0.35)
+        await pipeline.submitMouse(.left, down: false, clicks: 2, seq: 7, u: 0.4, v: 0.5)
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !backend.performed.contains("mouse.left.up"), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let buttons = backend.performedActions.filter { $0.kind.logName.hasPrefix("mouse.") }
+        #expect(buttons.map(\.kind.logName) == ["mouse.left.down", "mouse.left.up"])
+        #expect(buttons.map(\.cursor) == [CursorState(u: 0.25, v: 0.35), CursorState(u: 0.4, v: 0.5)])
+        let moves = backend.performedActions.filter { $0.kind.logName == "move" }
+        #expect(!moves.contains { $0.cursor == CursorState(u: 0.9, v: 0.9) })
         await pipeline.shutdown()
     }
 }

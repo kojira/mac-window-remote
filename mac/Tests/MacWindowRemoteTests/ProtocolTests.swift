@@ -14,6 +14,21 @@ import Testing
         #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace", mods: []))
     }
 
+    /// D47: file listing, search, and download requests go over the socket.
+    @Test func decodesFileMessages() throws {
+        #expect(try decode(#"{"t":"files.list","id":"r1","path":"~"}"#) == .filesList(id: "r1", path: "~", hidden: false))
+        #expect(try decode(#"{"t":"files.search","id":"r2","base":"/","q":"rep","hidden":true}"#)
+                == .filesSearch(id: "r2", base: "/", query: "rep", hidden: true))
+        #expect(try decode(#"{"t":"download.request","id":"r3","paths":["/a","/b c"]}"#)
+                == .downloadRequest(id: "r3", paths: ["/a", "/b c"]))
+        #expect(throws: ProtocolError.invalidValue("q")) { try decode(#"{"t":"files.search","id":"r","base":"/","q":"  "}"#) }
+        #expect(throws: ProtocolError.invalidValue("paths")) { try decode(#"{"t":"download.request","id":"r","paths":["rel"]}"#) }
+        #expect(throws: ProtocolError.invalidValue("paths")) { try decode(#"{"t":"download.request","id":"r","paths":[]}"#) }
+        #expect(throws: ProtocolError.wrongChannel("files.list")) {
+            try ClientMessage.decode(Data(#"{"t":"files.list","id":"r","path":"/"}"#.utf8), on: .control)
+        }
+    }
+
     /// D34: `key` with optional `mods`, normalized to cmd, ctrl, opt, shift order.
     @Test func decodesKeyWithMods() throws {
         #expect(try decode(#"{"t":"key","key":"c","mods":["cmd"]}"#) == .key(name: "c", mods: [.cmd]))
@@ -132,6 +147,34 @@ import Testing
         #expect(thumb["missing"] == nil)
         let missing = try object(.thumb(windowId: 9, jpeg: nil))
         #expect(missing["missing"] as? Bool == true && missing["jpeg"] == nil)
+    }
+
+    /// D45: desktop mouse position and buttons.
+    @Test func decodesDesktopMouse() throws {
+        #expect(try decode(#"{"t":"point","seq":7,"u":0.25,"v":1}"#) == .point(seq: 7, u: 0.25, v: 1))
+        #expect(try decode(#"{"t":"mouse","button":"left","state":"down","clicks":2,"seq":8,"u":0,"v":0.5}"#)
+                == .mouse(button: .left, down: true, clicks: 2, seq: 8, u: 0, v: 0.5))
+        #expect(try decode(#"{"t":"mouse","button":"right","state":"up","seq":9,"u":0.1,"v":0.2}"#)
+                == .mouse(button: .right, down: false, clicks: 1, seq: 9, u: 0.1, v: 0.2))
+        #expect(throws: ProtocolError.invalidValue("u")) { try decode(#"{"t":"point","seq":1,"u":1.01,"v":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("v")) { try decode(#"{"t":"point","seq":1,"u":0,"v":-0.1}"#) }
+        #expect(throws: ProtocolError.invalidValue("seq")) { try decode(#"{"t":"point","u":0,"v":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("button")) {
+            try decode(#"{"t":"mouse","button":"back","state":"down","seq":1,"u":0,"v":0}"#)
+        }
+        #expect(throws: ProtocolError.invalidValue("state")) {
+            try decode(#"{"t":"mouse","button":"left","state":"click","seq":1,"u":0,"v":0}"#)
+        }
+        #expect(throws: ProtocolError.invalidValue("clicks")) {
+            try decode(#"{"t":"mouse","button":"left","state":"down","clicks":0,"seq":1,"u":0,"v":0}"#)
+        }
+        func on(_ channel: MessageChannel, _ json: String) throws -> ClientMessage {
+            try ClientMessage.decode(Data(json.utf8), on: channel)
+        }
+        #expect(throws: ProtocolError.wrongChannel("point")) { try on(.control, #"{"t":"point","seq":1,"u":0,"v":0}"#) }
+        #expect(throws: ProtocolError.wrongChannel("mouse")) {
+            try on(.motion, #"{"t":"mouse","button":"left","state":"up","seq":1,"u":0,"v":0}"#)
+        }
     }
 
     /// D22: each message type is accepted only on the channel that carries it.
