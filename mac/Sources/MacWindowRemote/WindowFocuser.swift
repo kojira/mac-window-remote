@@ -7,11 +7,30 @@ enum WindowFocuser {
     enum Outcome: String {
         case alreadyFront = "already_front"
         case raised
+        /// Only the app was activated; no window was raised (D44).
+        case activated
     }
 
+    /// Before a click that lands on the app's own topmost window (D44): activates the app,
+    /// without raising any window, only when it is not the frontmost app. The click itself
+    /// makes the window key and front.
+    @MainActor
+    static func activateApp(pid: pid_t) -> Outcome {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return .alreadyFront }
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+        return .activated
+    }
+
+    /// `layer` is the window's CG layer. A normal window (0) is in front when it is the
+    /// frontmost layer-0 window (D8 step 1). A floating child (D44) never is, so it counts as
+    /// in front when its app is frontmost and the window is the app's focused (key) window.
     @discardableResult
-    static func focus(windowId: UInt32, pid: pid_t, bounds: CGRect) -> Outcome {
-        if WindowCatalog.frontmostWindowId() == windowId { return .alreadyFront }
+    static func focus(windowId: UInt32, pid: pid_t, bounds: CGRect, layer: Int = 0) -> Outcome {
+        if layer == 0 {
+            if WindowCatalog.frontmostWindowId() == windowId { return .alreadyFront }
+        } else if isFocusedWindowOfFrontmostApp(pid: pid, bounds: bounds) {
+            return .alreadyFront
+        }
         NSRunningApplication(processIdentifier: pid)?.activate()
         raise(pid: pid, bounds: bounds, title: WindowCatalog.windowName(windowId))
         return .raised
@@ -23,6 +42,23 @@ enum WindowFocuser {
         AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
     }
 
+    private static func isFocusedWindowOfFrontmostApp(pid: pid_t, bounds: CGRect) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        var frontmost: CFTypeRef?
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFrontmostAttribute as CFString, &frontmost) == .success,
+              (frontmost as? Bool) == true,
+              AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+              let value = focused, CFGetTypeID(value) == AXUIElementGetTypeID(),
+              let frame = frame(of: value as! AXUIElement) else { return false }
+        return matches(frame, bounds)
+    }
+
+    private static func matches(_ frame: CGRect, _ bounds: CGRect) -> Bool {
+        abs(frame.origin.x - bounds.origin.x) <= 1 && abs(frame.origin.y - bounds.origin.y) <= 1
+            && abs(frame.width - bounds.width) <= 1 && abs(frame.height - bounds.height) <= 1
+    }
+
     /// The app's AX window whose frame matches the CG `bounds` (within 1 pt), preferring the
     /// one with the same title (D8, D35).
     static func axWindow(pid: pid_t, bounds: CGRect, title: String?) -> AXUIElement? {
@@ -30,12 +66,11 @@ enum WindowFocuser {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return nil }
-        let matches = windows.filter { w in
+        let found = windows.filter { w in
             guard let frame = frame(of: w) else { return false }
-            return abs(frame.origin.x - bounds.origin.x) <= 1 && abs(frame.origin.y - bounds.origin.y) <= 1
-                && abs(frame.width - bounds.width) <= 1 && abs(frame.height - bounds.height) <= 1
+            return matches(frame, bounds)
         }
-        return matches.first { stringAttribute($0, kAXTitleAttribute) == title } ?? matches.first
+        return found.first { stringAttribute($0, kAXTitleAttribute) == title } ?? found.first
     }
 
     static func frame(of element: AXUIElement) -> CGRect? {

@@ -9,6 +9,8 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     private var viewing: WindowItem?
     private let displayAssertion = DisplayAssertion()
     private let resizer = WindowResizer()
+    /// The latest capture, whose composite the input maps to (D44).
+    private weak var capture: CaptureSession?
 
     init(rtc: RTCHost, onViewing: @escaping @Sendable (WindowItem?) -> Void) {
         self.rtc = rtc
@@ -50,6 +52,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             log.error("capture start failed id=\(windowId, privacy: .public): \(String(describing: error), privacy: .public)")
             return .unavailable(reason: "stream_stopped")
         }
+        lock.withLock { self.capture = capture }
         log.info("capture started id=\(windowId, privacy: .public)")
         return .started(capture, WindowCatalog.item(for: window))
     }
@@ -200,27 +203,62 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             log.info("input rejected kind=\(kind, privacy: .public) reason=permission_accessibility")
             return .permissionAccessibility
         }
-        guard let bounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
+        guard let windowBounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
             log.info("input rejected kind=\(kind, privacy: .public) reason=window_not_found")
             return .windowNotFound
         }
+        // With child windows the video is the composite area, so the cursor maps to it (D44).
+        let composite = lock.withLock { capture?.windowId == action.windowId ? capture?.composite : nil }
+        let bounds = composite?.rect ?? windowBounds
         let p = action.cursor.globalPoint(in: bounds)
         if case .move = action.kind {
             // A plain cursor move never needs focus (D25).
             await InputInjector.move(to: p)
             return nil
         }
-        // Everything else needs the window in front: raise once if it is not (D25).
+        // Everything else needs the window in front: raise once if it is not (D25). With child
+        // windows, a click on the app's own topmost window is posted without any raise; one
+        // under another app's window focuses the included window under it (never raising the
+        // viewed window over a child), and keys go to an adopted child in front (D44).
         var focus = WindowFocuser.Outcome.alreadyFront
         switch action.kind {
         case .dragEnd, .mouseButton(_, false, _): break
-        default: focus = WindowFocuser.focus(windowId: action.windowId, pid: pid, bounds: bounds)
+        default:
+            var target: ChildWindows.Entry? = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
+            var isClick = false
+            if let composite {
+                let entries = ChildWindows.onScreenEntries()
+                switch action.kind {
+                case .click, .rightClick, .dragStart, .mouseButton(_, true, _):
+                    isClick = true
+                    switch ChildWindows.clickFocus(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
+                                                   pid: pid, childIds: composite.childIds, entries: entries) {
+                    case .post: target = nil
+                    case .raise(let entry): target = entry
+                    }
+                default:
+                    let id = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
+                                                    entries: entries)
+                    if id != action.windowId, let childBounds = WindowCatalog.currentBounds(id) {
+                        target = ChildWindows.Entry(id: id, pid: pid, layer: 0, frame: childBounds)
+                    }
+                }
+            }
+            if let target {
+                focus = WindowFocuser.focus(windowId: target.id, pid: pid, bounds: target.frame, layer: target.layer)
+            } else {
+                focus = await MainActor.run { WindowFocuser.activateApp(pid: pid) }
+            }
+            if isClick {
+                let targetId = target.map { String($0.id) } ?? "topmost"
+                log.notice("click target id=\(targetId, privacy: .public) viewed=\(action.windowId, privacy: .public) layer=\(target?.layer ?? -1, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
+            }
         }
         switch action.kind {
         case .move:
             break
         case .click, .rightClick, .dragStart:
-            if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+            if focus != .alreadyFront { try? await Task.sleep(for: Self.clickAfterRaise) }
             switch action.kind {
             case .click:
                 let count = clickCounter.register(at: p, time: ProcessInfo.processInfo.systemUptime,
@@ -244,7 +282,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             case .middle: .center
             }
             if down {
-                if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+                if focus != .alreadyFront { try? await Task.sleep(for: Self.clickAfterRaise) }
                 await InputInjector.buttonDown(cgButton, at: p, clickState: clicks)
             } else {
                 await InputInjector.buttonUp(cgButton, at: p, clickState: clicks)

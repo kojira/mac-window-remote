@@ -2119,7 +2119,63 @@ On a real iPhone against the real Mac:
    title-verified press, `menu.list`/`menu.press` decoding, stale gen/window rejected; web
    decoding, drill-down, disabled rows, press with `gen`, closing.
 
-## 23. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
+## 23. The viewed app's floating and newly opened windows (user decision, Issue #16; amends D4, D25)
+
+### D44. Child windows are shown with the viewed window
+- **Why (user request, Issue #16):** plug-in editors and palettes (e.g. Melodyne in Logic Pro)
+  and windows the app opens while viewed (Settings, dialogs) are separate windows, so a plain
+  window capture never shows them.
+- **What is included.** While viewing window W of app P: W; P's on-screen windows at a
+  floating layer (0 < layer < 25) at least 60 × 60 pt; and P's normal (layer 0) windows whose
+  id did not exist when viewing W started. Those adopted windows stay included while open, even
+  behind W. P's other windows that already existed are not included. Children must touch W's
+  display.
+  Overlays: P's windows at layer 0..<25, at least 8 × 8 pt, in front of W or an included
+  window with ≥ 80 % of their area inside its frame and at most half its area, are included at
+  any size (Logic Pro draws title-bar buttons as separate 66 × 20 windows over each window).
+- **Capture.** With children, the stream uses `SCContentFilter(display:including:)` with W and
+  the children, `sourceRect` = union of W and the children's frames clamped to W's display.
+  The window list is polled every 0.5 s; a changed child set or area rebuilds the filter
+  (`updateContentFilter` + `updateConfiguration`). Without children, the stream is the plain
+  window capture exactly as before (D4).
+- **Input.** The phone's normalized cursor maps across the composite area, so a tap on a child
+  lands at its real screen position. When the frontmost window at the point (layers 0..<20,
+  all apps) is P's, the click is posted with no AX raise or re-ordering; P is only activated
+  (without raising windows) if it is not frontmost, so the click itself makes its window key
+  and front, and an overlay stays clickable. When another app's window covers the point, the
+  click focuses the included window under it: the first
+  of W and the children containing the point in the front-to-back on-screen window list
+  (`CGWindowListCopyWindowInfo(.optionOnScreenOnly)`), skipping every other window (other apps,
+  the Dock's and Notification Center's transparent full-screen windows). A click on a child
+  never raises W over it. A normal target is left alone when it is already the front normal
+  window; a floating one when its app is frontmost and it is the focused window; otherwise it
+  is activated and AX-raised (D8). Each click logs the target id and focus outcome. Keys go to
+  an adopted child while it is the front normal window, else W (D25).
+  `menu.press` never switches the view; a window it opens appears in the composite.
+- **Limits.** Children on another display and a W spanning displays are not composited. The
+  composite shows whatever of P's included windows covers W as on screen (other apps' windows
+  are left out). D35 fit resizes W only; with children the video aspect is the composite's.
+  A child appears up to about 0.5 s after it opens. Windows P opened before viewing W (except
+  floating ones) never join.
+- **Source changes:** `ChildWindows.swift`, `CaptureSession.swift`, `MacBackend.swift`,
+  `WindowFocuser.swift`.
+
+### D44 acceptance criteria
+On the real Mac and iPhone:
+1. Viewing a Logic Pro project, opening Melodyne shows its window in the video; a tap on it
+   reaches Melodyne at that spot.
+2. Viewing TextEdit, ☰ → TextEdit → Settings… shows the Settings window in the video next to
+   the document; tapping the document keeps Settings shown; closing Settings returns the video
+   to the document alone.
+3. Another TextEdit document that was already open is not shown.
+4. A window with no floating or new windows streams exactly as before.
+5. *Unit:* floating selection (layer range, same pid, 60 pt minimum), overlays (in front,
+   80 % containment, half-area cap, 8 pt minimum), no raise when P's window is topmost, adoption of new layer-0
+   windows, kept until closed, pre-existing excluded, union and display clamping, no children
+   ⇒ plain window, change detection, click/key focus targets, click hit test in front-to-back
+   order past other apps' and system overlay windows (`ChildWindowsTests`).
+
+## 24. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
 
 ### D45. Mouse and keyboard on a PC browser; the iPhone is unchanged
 - **Why (user request):** operate the Mac window from a desktop browser as directly as sitting
