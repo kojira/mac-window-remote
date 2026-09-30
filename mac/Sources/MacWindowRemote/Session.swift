@@ -295,6 +295,10 @@ actor Session {
             await input.submitMove(seq: seq, dx: dx, dy: dy)
         case .scroll(let du, let dv):
             await input.submitScroll(du: du, dv: dv)
+        case .point(let seq, let u, let v):
+            await input.submitPoint(seq: seq, u: u, v: v)
+        case .mouse(let button, let down, let clicks, let seq, let u, let v):
+            await input.submitMouse(button, down: down, clicks: clicks, seq: seq, u: u, v: v)
         case .click:
             await input.submit(.click)
         case .rightClick:

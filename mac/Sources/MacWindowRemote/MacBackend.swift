@@ -212,8 +212,9 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         }
         // Everything else needs the window in front: raise once if it is not (D25).
         var focus = WindowFocuser.Outcome.alreadyFront
-        if case .dragEnd = action.kind {} else {
-            focus = WindowFocuser.focus(windowId: action.windowId, pid: pid, bounds: bounds)
+        switch action.kind {
+        case .dragEnd, .mouseButton(_, false, _): break
+        default: focus = WindowFocuser.focus(windowId: action.windowId, pid: pid, bounds: bounds)
         }
         switch action.kind {
         case .move:
@@ -234,6 +235,20 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             }
         case .dragEnd:
             await InputInjector.dragEnd(at: p)
+        case .mouseButton(let button, let down, let clicks):
+            // D45: the browser counts clicks, so the Mac's own counter restarts.
+            clickCounter.reset()
+            let cgButton: CGMouseButton = switch button {
+            case .left: .left
+            case .right: .right
+            case .middle: .center
+            }
+            if down {
+                if focus == .raised { try? await Task.sleep(for: Self.clickAfterRaise) }
+                await InputInjector.buttonDown(cgButton, at: p, clickState: clicks)
+            } else {
+                await InputInjector.buttonUp(cgButton, at: p, clickState: clicks)
+            }
         case .scroll(let du, let dv):
             await InputInjector.scroll(at: p, dx: du * bounds.width, dy: dv * bounds.height)
         case .text(let text):
