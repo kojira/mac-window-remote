@@ -134,6 +134,34 @@ import Testing
         #expect(missing["missing"] as? Bool == true && missing["jpeg"] == nil)
     }
 
+    /// D45: desktop mouse position and buttons.
+    @Test func decodesDesktopMouse() throws {
+        #expect(try decode(#"{"t":"point","seq":7,"u":0.25,"v":1}"#) == .point(seq: 7, u: 0.25, v: 1))
+        #expect(try decode(#"{"t":"mouse","button":"left","state":"down","clicks":2,"seq":8,"u":0,"v":0.5}"#)
+                == .mouse(button: .left, down: true, clicks: 2, seq: 8, u: 0, v: 0.5))
+        #expect(try decode(#"{"t":"mouse","button":"right","state":"up","seq":9,"u":0.1,"v":0.2}"#)
+                == .mouse(button: .right, down: false, clicks: 1, seq: 9, u: 0.1, v: 0.2))
+        #expect(throws: ProtocolError.invalidValue("u")) { try decode(#"{"t":"point","seq":1,"u":1.01,"v":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("v")) { try decode(#"{"t":"point","seq":1,"u":0,"v":-0.1}"#) }
+        #expect(throws: ProtocolError.invalidValue("seq")) { try decode(#"{"t":"point","u":0,"v":0}"#) }
+        #expect(throws: ProtocolError.invalidValue("button")) {
+            try decode(#"{"t":"mouse","button":"back","state":"down","seq":1,"u":0,"v":0}"#)
+        }
+        #expect(throws: ProtocolError.invalidValue("state")) {
+            try decode(#"{"t":"mouse","button":"left","state":"click","seq":1,"u":0,"v":0}"#)
+        }
+        #expect(throws: ProtocolError.invalidValue("clicks")) {
+            try decode(#"{"t":"mouse","button":"left","state":"down","clicks":0,"seq":1,"u":0,"v":0}"#)
+        }
+        func on(_ channel: MessageChannel, _ json: String) throws -> ClientMessage {
+            try ClientMessage.decode(Data(json.utf8), on: channel)
+        }
+        #expect(throws: ProtocolError.wrongChannel("point")) { try on(.control, #"{"t":"point","seq":1,"u":0,"v":0}"#) }
+        #expect(throws: ProtocolError.wrongChannel("mouse")) {
+            try on(.motion, #"{"t":"mouse","button":"left","state":"up","seq":1,"u":0,"v":0}"#)
+        }
+    }
+
     /// D22: each message type is accepted only on the channel that carries it.
     @Test func messagesAreAcceptedOnlyOnTheirChannel() throws {
         func on(_ channel: MessageChannel, _ json: String) throws -> ClientMessage {

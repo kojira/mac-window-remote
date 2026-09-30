@@ -63,6 +63,11 @@ enum ClientMessage: Equatable {
     case move(seq: Int, dx: Double, dy: Double)
     /// Scroll in window-normalized units (D26).
     case scroll(du: Double, dv: Double)
+    /// Absolute cursor position in window-normalized units, from a desktop mouse (D45). `seq`
+    /// shares the `move` counter; a point older than the last applied one is dropped.
+    case point(seq: Int, u: Double, v: Double)
+    /// A desktop mouse button going down or up at (u, v), with the browser's click count (D45).
+    case mouse(button: MouseButton, down: Bool, clicks: Int, seq: Int, u: Double, v: Double)
     case click
     case rightClick
     case drag(start: Bool)
@@ -83,6 +88,11 @@ enum ClientMessage: Equatable {
     case menuList
     /// Press the item `id` of listing `gen` (D43).
     case menuPress(id: String, gen: Int)
+}
+
+/// A desktop mouse button (D45).
+enum MouseButton: String, Sendable, Equatable {
+    case left, right, middle
 }
 
 /// What Mac audio goes to the phone (D39). Not persisted on the Mac; the phone re-sends it.
@@ -132,6 +142,10 @@ extension ClientMessage {
         let mode: String?
         let id: String?
         let gen: Int?
+        let u: Double?
+        let v: Double?
+        let button: String?
+        let clicks: Int?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -163,6 +177,17 @@ extension ClientMessage {
             guard x.isFinite, abs(x) <= 1 else { throw ProtocolError.invalidValue(name) }
             return x
         }
+        func sequence() throws -> Int {
+            let seq = try require(e.seq, "seq")
+            guard seq >= 0 else { throw ProtocolError.invalidValue("seq") }
+            return seq
+        }
+        // D45: an absolute position is finite and within [0, 1].
+        func position(_ value: Double?, _ name: String) throws -> Double {
+            let x = try require(value, name)
+            guard x.isFinite, (0...1).contains(x) else { throw ProtocolError.invalidValue(name) }
+            return x
+        }
         switch e.t {
         case "windows.list":
             return .windowsList
@@ -186,6 +211,22 @@ extension ClientMessage {
             return .move(seq: seq, dx: try delta(e.dx, "dx"), dy: try delta(e.dy, "dy"))
         case "scroll":
             return .scroll(du: try delta(e.du, "du"), dv: try delta(e.dv, "dv"))
+        case "point":
+            return .point(seq: try sequence(), u: try position(e.u, "u"), v: try position(e.v, "v"))
+        case "mouse":
+            guard let button = MouseButton(rawValue: try require(e.button, "button")) else {
+                throw ProtocolError.invalidValue("button")
+            }
+            let down: Bool
+            switch try require(e.state, "state") {
+            case "down": down = true
+            case "up": down = false
+            default: throw ProtocolError.invalidValue("state")
+            }
+            let clicks = e.clicks ?? 1
+            guard (1...3).contains(clicks) else { throw ProtocolError.invalidValue("clicks") }
+            return .mouse(button: button, down: down, clicks: clicks, seq: try sequence(),
+                          u: try position(e.u, "u"), v: try position(e.v, "v"))
         case "click":
             return .click
         case "rightClick":
@@ -246,8 +287,8 @@ extension ClientMessage {
         switch self {
         case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress:
             return .socket
-        case .move, .scroll: return .motion
-        case .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
+        case .move, .scroll, .point: return .motion
+        case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
         }
     }
 
@@ -261,6 +302,8 @@ extension ClientMessage {
         case .rtcIce: return "rtc.ice"
         case .move: return "move"
         case .scroll: return "scroll"
+        case .point: return "point"
+        case .mouse: return "mouse"
         case .click: return "click"
         case .rightClick: return "rightClick"
         case .drag: return "drag"

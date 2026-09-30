@@ -14,8 +14,8 @@ enum InputInjector {
     private static var source: CGEventSource? { CGEventSource(stateID: .hidSystemState) }
     private static let tap = CGEventTapLocation.cghidEventTap
 
-    /// Whether a drag holds the left button (D26).
-    private(set) static var leftButtonHeld = false
+    /// The button a drag (D26) or a desktop mouse (D45) holds down, if any.
+    private(set) static var heldButton: CGMouseButton?
     private static var lastPoint: CGPoint?
 
     private static func mouse(_ type: CGEventType, at p: CGPoint, button: CGMouseButton = .left, clickState: Int = 1) {
@@ -25,9 +25,22 @@ enum InputInjector {
         lastPoint = p
     }
 
-    /// `mouseMoved`, or `leftMouseDragged` while a drag holds the button.
+    /// Event types for a button's down, up, and dragged events.
+    private static func types(_ button: CGMouseButton) -> (down: CGEventType, up: CGEventType, dragged: CGEventType) {
+        switch button {
+        case .left: return (.leftMouseDown, .leftMouseUp, .leftMouseDragged)
+        case .right: return (.rightMouseDown, .rightMouseUp, .rightMouseDragged)
+        default: return (.otherMouseDown, .otherMouseUp, .otherMouseDragged)
+        }
+    }
+
+    /// `mouseMoved`, or the held button's dragged event.
     static func move(to p: CGPoint) {
-        mouse(leftButtonHeld ? .leftMouseDragged : .mouseMoved, at: p)
+        if let held = heldButton {
+            mouse(types(held).dragged, at: p, button: held)
+        } else {
+            mouse(.mouseMoved, at: p)
+        }
     }
 
     /// `clickState` is 2 or 3 for quick successive clicks at one place (D26).
@@ -44,24 +57,34 @@ enum InputInjector {
     }
 
     static func dragStart(at p: CGPoint) {
-        guard !leftButtonHeld else { return }
-        move(to: p)
-        mouse(.leftMouseDown, at: p)
-        leftButtonHeld = true
+        buttonDown(.left, at: p, clickState: 1)
     }
 
     static func dragEnd(at p: CGPoint) {
-        guard leftButtonHeld else { return }
+        buttonUp(.left, at: p, clickState: 1)
+    }
+
+    /// A desktop mouse button goes down (D45). Only one button is held at a time; another
+    /// button's down while one is held is ignored.
+    static func buttonDown(_ button: CGMouseButton, at p: CGPoint, clickState: Int) {
+        guard heldButton == nil else { return }
         move(to: p)
-        mouse(.leftMouseUp, at: p)
-        leftButtonHeld = false
+        mouse(types(button).down, at: p, button: button, clickState: clickState)
+        heldButton = button
+    }
+
+    static func buttonUp(_ button: CGMouseButton, at p: CGPoint, clickState: Int) {
+        guard heldButton == button else { return }
+        move(to: p)
+        mouse(types(button).up, at: p, button: button, clickState: clickState)
+        heldButton = nil
     }
 
     /// Releases a held button at the last posted point, so it is never left stuck (D26).
     static func releaseButton() {
-        guard leftButtonHeld, let p = lastPoint else { leftButtonHeld = false; return }
-        mouse(.leftMouseUp, at: p)
-        leftButtonHeld = false
+        guard let held = heldButton, let p = lastPoint else { heldButton = nil; return }
+        mouse(types(held).up, at: p, button: held)
+        heldButton = nil
     }
 
     /// Deltas in points of finger movement. Content follows the finger: a positive wheel value

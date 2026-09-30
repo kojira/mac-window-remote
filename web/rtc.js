@@ -5,7 +5,7 @@ const CONNECT_TIMEOUT_MS = 10000;
 const DISCONNECT_GRACE_MS = 3000;
 
 /// Which data channel carries an input message (D22).
-const MOTION_TYPES = new Set(['move', 'scroll']);
+const MOTION_TYPES = new Set(['move', 'scroll', 'point']);
 
 export class VideoLink {
   /// signal(msg): send a WebSocket message; returns false if the socket is not ready.

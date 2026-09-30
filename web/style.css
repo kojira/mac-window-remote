@@ -53,6 +53,10 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #cursor::before { content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 20px;
   background: #fff; clip-path: polygon(0 0, 0 100%, 30% 75%, 55% 100%, 70% 92%, 47% 68%, 100% 68%);
   filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); }
+/* D45: receives physical keys and IME on a desktop; kept on screen (IMEs place their candidate
+   window at it) but invisible and outside the stage's input. */
+#key-sink { position: absolute; left: 8px; bottom: calc(64px + env(safe-area-inset-bottom)); width: 1px; height: 1px;
+  opacity: 0; border: 0; padding: 0; resize: none; overflow: hidden; pointer-events: none; }
 #drag-badge { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(env(safe-area-inset-bottom) + 64px);
   background: rgba(10, 132, 255, 0.92); color: #fff; padding: 8px 14px; border-radius: 16px; font-size: 14px;
   pointer-events: none; }

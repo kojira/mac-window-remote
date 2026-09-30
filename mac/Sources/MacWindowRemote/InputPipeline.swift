@@ -12,6 +12,8 @@ struct InputAction: Sendable {
         case rightClick
         case dragStart
         case dragEnd
+        /// A desktop mouse button down or up at `cursor`, with its click count (D45).
+        case mouseButton(MouseButton, down: Bool, clicks: Int)
         case text(String)
         case key(String, mods: [KeyModifier])
         /// Put the text on the Mac clipboard, then ⌘V into the window (D36).
@@ -31,6 +33,7 @@ struct InputAction: Sendable {
 /// Discrete inputs that `InputPipeline.submit` accepts.
 enum DiscreteInput: Sendable {
     case click, rightClick, dragStart, dragEnd
+    case mouseButton(MouseButton, down: Bool, clicks: Int)
     case text(String)
     case key(String, mods: [KeyModifier])
     case paste(String)
@@ -103,6 +106,26 @@ actor InputPipeline {
         scheduleMotion()
     }
 
+    /// Desktop mouse position (D45): the cursor jumps to (u, v). A point that arrives after a
+    /// newer move, point, or button (the motion channel is unordered) is dropped.
+    func submitPoint(seq: Int, u: Double, v: Double) {
+        guard target != nil, !closed, seq > appliedSeq else { return }
+        cursor = CursorState(u: u, v: v)
+        appliedSeq = seq
+        motionDirty = true
+        scheduleMotion()
+    }
+
+    /// Desktop mouse button (D45): the button goes down or up where the mouse is.
+    func submitMouse(_ button: MouseButton, down: Bool, clicks: Int, seq: Int, u: Double, v: Double) {
+        guard target != nil, !closed else { return }
+        if seq > appliedSeq {
+            cursor = CursorState(u: u, v: v)
+            appliedSeq = seq
+        }
+        submit(.mouseButton(button, down: down, clicks: clicks))
+    }
+
     func submitScroll(du: Double, dv: Double) {
         guard target != nil, !closed else { return }
         let s = pendingScroll ?? (0, 0)
@@ -123,6 +146,7 @@ actor InputPipeline {
         case .rightClick: kind = .rightClick
         case .dragStart: kind = .dragStart
         case .dragEnd: kind = .dragEnd
+        case .mouseButton(let button, let down, let clicks): kind = .mouseButton(button, down: down, clicks: clicks)
         case .text(let text): kind = .text(text)
         case .key(let name, let mods): kind = .key(name, mods: mods)
         case .paste(let text): kind = .paste(text)
@@ -245,6 +269,7 @@ extension DiscreteInput {
         case .rightClick: return "rightClick"
         case .dragStart: return "drag.start"
         case .dragEnd: return "drag.end"
+        case .mouseButton(let button, let down, _): return "mouse.\(button.rawValue).\(down ? "down" : "up")"
         case .text: return "text"
         case .key: return "key"
         case .paste: return "paste"
@@ -269,6 +294,7 @@ extension InputAction.Kind {
         case .rightClick: return "rightClick"
         case .dragStart: return "drag.start"
         case .dragEnd: return "drag.end"
+        case .mouseButton(let button, let down, _): return "mouse.\(button.rawValue).\(down ? "down" : "up")"
         case .text: return "text"
         case .key: return "key"
         case .paste: return "paste"
