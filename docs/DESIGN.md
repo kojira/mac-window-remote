@@ -6,7 +6,8 @@ trackpad-style input), which is implemented and awaits acceptance on a real iPho
 viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) replaces the
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
 §16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys.
-§19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab.** Sections marked *Superseded by §11* describe
+§19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab. §23 (D45) adds
+a desktop browser's mouse and keyboard.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -2117,3 +2118,62 @@ On a real iPhone against the real Mac:
 5. *Unit:* tree building (Apple menu omitted, separators, caps, truncation, shortcuts, marks),
    title-verified press, `menu.list`/`menu.press` decoding, stale gen/window rejected; web
    decoding, drill-down, disabled rows, press with `gen`, closing.
+
+## 23. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
+
+### D45. Mouse and keyboard on a PC browser; the iPhone is unchanged
+- **Why (user request):** operate the Mac window from a desktop browser as directly as sitting
+  at the Mac. Touch input (D23, D24) and the iPhone text field (D10, D34) do not change.
+- **Mouse (`pointerType === 'mouse'`).** Absolute mapping: the point under the mouse on the
+  video is the window point. Moves go at most once per animation frame on `motion` as
+  `{"t":"point","seq","u","v"}` (u, v in [0, 1]; `seq` shares the `move` counter and a point
+  older than the last applied `seq` is dropped, since `motion` is unordered). Buttons go on
+  `control` as `{"t":"mouse","button":"left|right|middle","state":"down|up","clicks":1–3,
+  "seq","u","v"}`: the Mac moves the cursor there and posts the button's down or up with
+  `clicks` as the click state (a double-click is the browser's `detail` 2, so the Mac sees
+  clickCount 2). While a button is held the Mac posts the button's dragged events, and the
+  point is clamped to the window edge. One button at a time; a held button is released on
+  disconnect or window change as before (D26). The wheel sends the existing `scroll`
+  (pixel deltas; line mode ×16 px, page mode × the stage height; both axes; ctrl+wheel, a
+  trackpad pinch, is swallowed). The context menu is suppressed. The phone's arrow overlay
+  is not drawn for a mouse; the browser's own cursor stays visible because the stream does
+  not render the Mac cursor (`showsCursor = false`). No pointer lock.
+- **Keyboard.** Active when the viewer is shown on a desktop (a mouse was pressed on the
+  stage, or `(pointer: fine)` matches) and no sheet, ⋯ menu, slot menu, or text field is in
+  use. Keys arrive in a hidden, focused textarea (`#key-sink`) so an IME can compose. A
+  keydown with no modifier but shift (or with AltGr) whose `key` is one printable character is
+  sent as `text` (the user's layout is respected); otherwise `KeyboardEvent.code` is mapped by
+  US position to a §4.3 key name and sent as `key` with `mods` from metaKey→cmd, ctrlKey→ctrl,
+  altKey→opt, shiftKey→shift (D38 Fn/NumPad flags apply on the Mac as for the key panel).
+  Forwarded keys, and their keyups, are `preventDefault`ed. Modifier keys alone, unmapped
+  keys, dead keys, and anything during IME composition are not forwarded; `compositionend`
+  sends the committed text through `text`. Clicking a bottom-bar or panel button returns focus
+  to the key sink.
+- **Limits.** Keys the browser or OS keeps are never seen by the page (e.g. ⌘Tab, ⌘Q, ⌘W, ⌘T,
+  ⌘N and ⌘L in most browsers, Ctrl+Alt+Del, the Windows key); use the key panel's ⌘Tab / ⌘F1 /
+  ⌘Q for those. Option+letter goes as ⌥+key (the Mac's own layout decides the character), and
+  keys beyond §4.3 (F13+, media keys, Intl keys) are ignored. Keys do not repeat faster than the
+  browser's auto-repeat, and each is one combo (down and up) on the Mac, so holding a key on
+  the Mac (e.g. a game) is not possible.
+- **Source changes:** `Protocol.swift` (`point`, `mouse`), `Session.swift`,
+  `InputPipeline.swift` (`submitPoint`, `submitMouse`), `InputInjector.swift` (held button of
+  any kind), `MacBackend.swift`; `web/desktop.js`, `web/viewer.js`, `web/app.js`, `web/rtc.js`,
+  `web/index.html`, `web/style.css`.
+
+### D45 acceptance criteria
+On a desktop browser (Chrome or Safari on a PC or another Mac) against the real Mac:
+1. Moving the mouse over the video moves the Mac cursor to the same spot in the window;
+   no arrow overlay is drawn.
+2. Click, double-click (selects a word in TextEdit), right-click (opens the context menu,
+   not the browser's), and drag (selects text or moves a window item) work where the mouse is.
+3. The wheel scrolls the window in both directions and axes.
+4. Typing letters, digits, and symbols (on the user's layout), Enter, Backspace, Tab, Esc,
+   arrows, Home/End/PageUp/PageDown, F1–F12 goes to the window; ⌘C/⌘V/⌘Z and ⌃/⌥ combos work.
+5. With a Japanese IME, composing shows candidates in the browser and only the committed text
+   arrives on the Mac.
+6. The ⋯ menu, ☰ sheet, paste sheet, and the text field receive keys themselves; nothing is
+   forwarded while they are in use. The bottom bar and key panel work with the mouse.
+7. On the iPhone, the trackpad, overlay arrow, text field, and key panel behave as before.
+8. *Unit:* `point`/`mouse` decoding and channels; absolute cursor and stale points in the
+   pipeline; web code→key mapping, text-vs-combo decision, IME composition, mouse button,
+   click count, wheel, and stage→window translation.
