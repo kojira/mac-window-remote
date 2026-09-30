@@ -2185,3 +2185,48 @@ On a desktop browser (Chrome or Safari on a PC or another Mac) against the real 
 Desktop Chrome left 🔊 on "tap to enable": a track added to the stream that is already the `<audio>` source was not picked up, and `play()` stayed pending, so the click only tried to unlock and never cycled. `setTrack` now re-assigns `srcObject`, and if `play()` has not settled after 0.8 s while the page has sticky user activation (`navigator.userActivation.hasBeenActive`), the element counts as unlocked. iOS is unchanged (its play() settles).
 
 Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and the Mac's sound plays; the iPhone behaves as before.
+
+## 26. Download files from the Mac (user decision, Issue #23)
+
+### D47. ⬇︎ Download in the ⋯ menu: a file browser, name search, and one-time download links
+- **Entry.** ⋯ → ⬇︎ Download (after 📎 File) opens a full-height sheet (touch and mouse). It starts
+  at the home folder (then where it was last). Quick places: Home, Desktop, Documents,
+  Downloads, Computer (`/`), and each `/Volumes/*` except the boot-disk link. A breadcrumb
+  header and ‹ go up. Rows: icon, name, size, date; folders first, then name (localized,
+  case-insensitive). A Hidden toggle shows dot-files. An unreadable folder shows "No access".
+- **Listing and search over the socket.** `{"t":"files.list","id","path","hidden"}` →
+  `{"t":"files","id","path","entries","total","truncated","places"}`; at most 5,000 entries,
+  with "Showing the first N of M". `{"t":"files.search","id","base","q","hidden"}` →
+  `{"t":"files.found","id","base","entries","truncated","timedOut"}`: a file-NAME
+  case-insensitive substring match. "Search in:" defaults to the current folder, is editable
+  (`~` expands), and has quick picks "current folder" and "/". The walk skips package contents,
+  hidden entries unless shown, and, from `/`, `/System`, `/private`, and `/dev`. It stops at 500
+  matches or about 5 s, and a newer search cancels it. Results show their parent path and can
+  be selected.
+- **Download.** A checkbox per row (a tap on a file row toggles it too) and a sticky bar
+  "N selected · size" with Download. `{"t":"download.request","id","paths"}` checks each path on
+  the Mac (absolute, standardized, must exist and be readable; `/` itself is refused) and
+  pre-scans folders. Over 2 GB (file sizes before compression) or 100,000 files → `too_large`
+  with a clear message, before anything is sent. Otherwise → `{"t":"download.ready","id","url",
+  "name","size"}` with `url` = `/download/<token>`: 48 hex characters, valid once, for 60 s,
+  for exactly that path set. The page navigates a hidden `<a download>` to it, so iOS Safari
+  and desktop browsers save the file. The GET goes through the owner check (D32).
+- **Response.** One file → as is (`application/octet-stream`, `Content-Length`). Several items or
+  any folder → one zip streamed while it is built: relative paths under each selected item's
+  name, ZIP64 when sizes or offsets need it, STORE for already-compressed types, DEFLATE
+  otherwise. Name: `<folder>.zip`, `<shared parent>.zip`, or `download-<yyyyMMdd-HHmmss>.zip`.
+  `Content-Disposition: attachment; filename="<ASCII fallback>"; filename*=UTF-8''<name>`.
+- **Read only.** Nothing is created, changed, or deleted on the Mac.
+- **Limits.** Folders are zipped with hidden files; symlinked folders inside are not entered;
+  unreadable items inside a folder are left out. Privacy-protected folders (TCC) show "No
+  access" unless the app has been given access. A file that changes during the download is sent
+  as read.
+
+### D47 acceptance criteria
+- ⋯ shows ⬇︎ Download after 📎 File; it opens at home with the quick places.
+- Folders open on tap; ‹ and the breadcrumbs go up; Hidden shows dot-files.
+- Checking one file and Download saves it with its name; checking a folder or several items
+  saves one zip that `unzip -t` accepts.
+- A selection over 2 GB shows the limit message and downloads nothing.
+- Search finds names under the current folder, `/`, or a typed `~/…` path within about 5 s.
+- A used or expired `/download/…` link answers 404.
