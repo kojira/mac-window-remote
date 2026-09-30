@@ -65,7 +65,7 @@ export function parentPath(path) {
   return i <= 0 ? '/' : path.slice(0, i);
 }
 
-/// "/Users/u/Docs" → [{name: '/', path: '/'}, {name: 'Users', …}, {name: 'u', …}, {name: 'Docs', …}].
+/// "/a/b" → [{name: '/', path: '/'}, {name: 'a', path: '/a'}, {name: 'b', path: '/a/b'}].
 export function breadcrumbs(path) {
   const crumbs = [{ name: '/', path: '/' }];
   let at = '';
