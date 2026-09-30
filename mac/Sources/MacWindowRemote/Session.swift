@@ -81,6 +81,8 @@ actor SessionHub {
     let backend: any SessionBackend
     let owner: OwnerLogin
     let uploads: UploadStore
+    /// One-time download tokens (D47), shared by the session that issues them and the HTTP route.
+    private var downloads = DownloadTokenStore()
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
     init(owner: OwnerLogin, backend: any SessionBackend, uploads: UploadStore = .standard,
@@ -107,6 +109,16 @@ actor SessionHub {
             // Stop its capture now, so it cannot release state the new session sets up.
             await previous.teardown()
         }
+    }
+
+    /// A one-time token for `GET /download/<token>` (D47).
+    func issueDownload(_ plan: DownloadPlan) -> String {
+        downloads.issue(plan)
+    }
+
+    /// The plan of a token, which then no longer works; nil if unknown, used, or expired.
+    func takeDownload(_ token: String) -> DownloadPlan? {
+        downloads.take(token)
     }
 
     func ended(_ session: Session) {
@@ -143,6 +155,14 @@ actor SessionHub {
     }
 }
 
+/// Set once from any thread; read by a file search between entries (D47).
+private final class CancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
+}
+
 /// Lets the input pipeline, created in `Session.init`, call back into its session.
 private final class WeakSession: @unchecked Sendable {
     weak var session: Session?
@@ -167,6 +187,8 @@ actor Session {
     private var thumbsTask: Task<Void, Never>?
     /// The pending `app.open` (D40); a newer one, a view change, or teardown cancels it.
     private var appOpenTask: Task<Void, Never>?
+    /// The running file search (D47); a newer search cancels it.
+    private var searchTask: Task<Void, Never>?
 
     // The viewed app's menu bar (D43): the last listing's number, window, and leaf titles.
     private var menuGen = 0
@@ -336,7 +358,89 @@ actor Session {
             await listMenu()
         case .menuPress(let id, let gen):
             await pressMenu(id: id, gen: gen)
+        case .filesList(let id, let path, let hidden):
+            await listFiles(id: id, path: path, hidden: hidden)
+        case .filesSearch(let id, let base, let query, let hidden):
+            searchFiles(id: id, base: base, query: query, hidden: hidden)
+        case .downloadRequest(let id, let paths):
+            await prepareDownload(id: id, paths: paths)
         }
+    }
+
+    // MARK: Download files from the Mac (D47)
+
+    private static let home = NSHomeDirectory()
+
+    private func listFiles(id: String, path: String, hidden: Bool) async {
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<FileListing, FileBrowserError> in
+            Result { try FileBrowser.list(path: path, home: Session.home, showHidden: hidden) }
+                .mapError { $0 as? FileBrowserError ?? .noAccess }
+        }.value
+        switch outcome {
+        case .success(let listing):
+            log.info("files listed count=\(listing.entries.count, privacy: .public) total=\(listing.total, privacy: .public)")
+            await send(.files(id: id, listing: listing, places: FileBrowser.places(home: Session.home)))
+        case .failure(let error):
+            await sendFileError(error, id: id)
+        }
+    }
+
+    private func searchFiles(id: String, base: String, query: String, hidden: Bool) {
+        searchTask?.cancel()
+        searchTask = Task { [weak self] in
+            // The walk runs off the actor; a newer search or teardown stops it through the flag.
+            let stop = CancelFlag()
+            let outcome = await withTaskCancellationHandler {
+                await Task.detached(priority: .userInitiated) { () -> Result<FileSearchResult, FileBrowserError> in
+                    Result {
+                        try FileBrowser.search(base: base, query: query, home: Session.home, showHidden: hidden,
+                                               isCancelled: { stop.isSet })
+                    }.mapError { $0 as? FileBrowserError ?? .noAccess }
+                }.value
+            } onCancel: { stop.set() }
+            guard !Task.isCancelled else { return }
+            switch outcome {
+            case .success(let result):
+                log.info("files found count=\(result.entries.count, privacy: .public) timedOut=\(result.timedOut, privacy: .public)")
+                await self?.send(.filesFound(id: id, result: result))
+            case .failure(let error):
+                await self?.sendFileError(error, id: id)
+            }
+        }
+    }
+
+    /// Checks the paths and pre-scans sizes, then replies with a one-time URL for exactly them.
+    private func prepareDownload(id: String, paths: [String]) async {
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<DownloadPlan, FileBrowserError> in
+            Result { try DownloadPlanner.plan(paths: paths, home: Session.home) }
+                .mapError { $0 as? FileBrowserError ?? .noAccess }
+        }.value
+        switch outcome {
+        case .success(let plan):
+            guard let hub else { return }
+            let token = await hub.issueDownload(plan)
+            let size: Int64
+            switch plan {
+            case .file(_, _, let s): size = s
+            case .zip(_, _, let total): size = total
+            }
+            log.info("download ready items=\(paths.count, privacy: .public) bytes=\(size, privacy: .public)")
+            await send(.downloadReady(id: id, url: "/download/\(token)", name: plan.fileName, size: size))
+        case .failure(let error):
+            await sendFileError(error, id: id)
+        }
+    }
+
+    private func sendFileError(_ error: FileBrowserError, id: String) async {
+        let message: String
+        switch error {
+        case .badPath: message = "Not a valid path"
+        case .notFound: message = "Not found"
+        case .notADirectory: message = "Not a folder"
+        case .noAccess: message = "No access"
+        case .tooLarge: message = "Too large to download (max 2 GB, 100,000 files)"
+        }
+        await send(.error(code: error.code, message: message, id: id))
     }
 
     // MARK: The viewed app's menu bar (D43)
@@ -764,6 +868,7 @@ actor Session {
         pingTask?.cancel()
         thumbsTask?.cancel()
         appOpenTask?.cancel()
+        searchTask?.cancel()
         // Replacing or ending the session also closes its peer connection (D22).
         closePeer()
         await input.shutdown()

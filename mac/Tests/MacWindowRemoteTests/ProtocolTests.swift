@@ -14,6 +14,21 @@ import Testing
         #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace", mods: []))
     }
 
+    /// D47: file listing, search, and download requests go over the socket.
+    @Test func decodesFileMessages() throws {
+        #expect(try decode(#"{"t":"files.list","id":"r1","path":"~"}"#) == .filesList(id: "r1", path: "~", hidden: false))
+        #expect(try decode(#"{"t":"files.search","id":"r2","base":"/","q":"rep","hidden":true}"#)
+                == .filesSearch(id: "r2", base: "/", query: "rep", hidden: true))
+        #expect(try decode(#"{"t":"download.request","id":"r3","paths":["/a","/b c"]}"#)
+                == .downloadRequest(id: "r3", paths: ["/a", "/b c"]))
+        #expect(throws: ProtocolError.invalidValue("q")) { try decode(#"{"t":"files.search","id":"r","base":"/","q":"  "}"#) }
+        #expect(throws: ProtocolError.invalidValue("paths")) { try decode(#"{"t":"download.request","id":"r","paths":["rel"]}"#) }
+        #expect(throws: ProtocolError.invalidValue("paths")) { try decode(#"{"t":"download.request","id":"r","paths":[]}"#) }
+        #expect(throws: ProtocolError.wrongChannel("files.list")) {
+            try ClientMessage.decode(Data(#"{"t":"files.list","id":"r","path":"/"}"#.utf8), on: .control)
+        }
+    }
+
     /// D34: `key` with optional `mods`, normalized to cmd, ctrl, opt, shift order.
     @Test func decodesKeyWithMods() throws {
         #expect(try decode(#"{"t":"key","key":"c","mods":["cmd"]}"#) == .key(name: "c", mods: [.cmd]))
