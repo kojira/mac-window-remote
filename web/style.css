@@ -102,7 +102,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
   border-radius: 50%; background: #ff9f0a; }
 
 /* D34: the key panel sits above the bottom bar; the stage ends at its top edge. Both layers
-   have three rows: the normal layer's third row is ⌘F1, ⌘Tab (D37), space, ⏎, and ⋯ (D41). */
+   have three rows: the normal layer's third row is ⌘F1, ⌘W (D37, D48), space, ⏎, and ⋯ (D41). */
 #viewer { --key-h: 50px; --panel-rows: 3; --panel-h: calc(var(--panel-rows) * (var(--key-h) + 6px) + 6px); }
 @media (max-height: 500px) { #viewer { --key-h: 38px; } }
 #viewer.panel-open #stage { bottom: calc(56px + var(--panel-h) + env(safe-area-inset-bottom)); }

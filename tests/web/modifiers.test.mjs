@@ -65,7 +65,7 @@ test('charKeyName: a-z, 0-9, ANSI punctuation, and space are keys; anything else
 test('mergeMods: a combo key adds its mods to the active ones, each once, in wire order', () => {
   const m = new ModifierState();
   m.tap('shift');
-  assert.deepEqual(mergeMods(m.consume(), ['cmd']), ['cmd', 'shift']); // armed ⇧ + ⌘Tab = ⌘⇧Tab
+  assert.deepEqual(mergeMods(m.consume(), ['cmd']), ['cmd', 'shift']); // armed ⇧ + a ⌘ combo key adds shift
   assert.equal(m.get('shift'), 'off');
   m.lock('cmd');
   assert.deepEqual(mergeMods(m.consume(), ['cmd']), ['cmd']); // never a repeated mod

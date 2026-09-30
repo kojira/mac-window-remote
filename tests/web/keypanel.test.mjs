@@ -67,10 +67,10 @@ function setup() {
   return { panel, kp, sent, actions, modifiers, key, item, tap, touchOutside };
 }
 
-test('the third row is ⌘F1, ⌘Tab, space (wide), ⏎, ⋯; Paste and Image are not in the row', () => {
+test('the third row is ⌘F1, ⌘W, space (wide), ⏎, ⋯; Paste and Image are not in the row', () => {
   const { panel } = setup();
   const labels = panel.children.map((b) => b.label);
-  assert.deepEqual(labels.slice(12), ['⌘F1', '⌘Tab', 'space', '⏎', '⋯']);
+  assert.deepEqual(labels.slice(12), ['⌘F1', '⌘W', 'space', '⏎', '⋯']);
   assert.ok(panel.children[14].classList.contains('wide'));
   assert.ok(!labels.includes('📋 Paste') && !labels.includes('🖼 Image'));
 });
