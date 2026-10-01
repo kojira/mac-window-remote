@@ -1,5 +1,5 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
-// an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
+// an fn layer with F1–F12, and ⌫ (D54); opening the panel shows the text field. The normal layer's
 // third row is one-tap ⌘F1 and ⌘W (D37, D48), space, ⏎, and ⋯, a menu with 📋 Paste, 📋 Copy to Mac (D52), 🖼 Image
 // (D36), 📎 File (D42), ⬇︎ Download (D47), and ⌘Q (D41).
 
@@ -11,10 +11,10 @@ const REPEAT_INTERVAL_MS = 66; // about 15 per second
 const PRESSED_MIN_MS = 120;
 
 // {label, key} sends a key (with `mods` added to the active modifiers, D37); {label, mod} is a
-// modifier; fn and text are special.
+// modifier; fn is special.
 const NORMAL = [
   { label: 'esc', key: 'Escape' }, { label: '⇧', mod: 'shift' }, { label: 'tab', key: 'Tab' },
-  { label: 'fn', fn: true }, { label: '↑', key: 'ArrowUp', repeat: true }, { label: 'text', text: true },
+  { label: 'fn', fn: true }, { label: '↑', key: 'ArrowUp', repeat: true }, { label: '⌫', key: 'Backspace', repeat: true },
   { label: '⌃', mod: 'ctrl' }, { label: '⌘', mod: 'cmd' }, { label: '⌥', mod: 'opt' },
   { label: '←', key: 'ArrowLeft', repeat: true }, { label: '↓', key: 'ArrowDown', repeat: true },
   { label: '→', key: 'ArrowRight', repeat: true },
@@ -38,7 +38,7 @@ const FN = [
 
 export class KeyPanel {
   /// sendKey(name, mods): send a `key` message. modifiers: a ModifierState.
-  /// textInput: the TextInput (focus/blur of the iOS keyboard field).
+  /// textInput: the TextInput, shown (not focused) while the panel is open (D54).
   /// onLayout(change): runs change(), which opens, closes, or resizes the panel, and re-fits
   /// the stage around it. onAction('paste' | 'copy' | 'image' | 'file' | 'download') runs inside the tap (a user gesture),
   /// as the clipboard read and the file picker require (D36).
@@ -53,14 +53,12 @@ export class KeyPanel {
     this.onAction = onAction;
     this.fnLayer = false;
     this.modButtons = [];
-    this.textButton = null;
     this.repeatTimer = null;
     this.menu = null;
     this.moreButton = null;
 
     toggle.addEventListener('click', () => (this.isOpen() ? this.close() : this.open()));
     modifiers.onChange = () => this.renderModifiers();
-    textInput.onFocusChange = (focused) => this.textButton?.classList.toggle('active', focused);
     // A held key must not keep repeating into a later connection.
     document.addEventListener('visibilitychange', () => { this.stopRepeat(); this.closeMenu(); });
     // A touch outside the ⋯ menu closes it and still goes where it was aimed (the trackpad
@@ -78,17 +76,18 @@ export class KeyPanel {
   open() {
     this.toggleButton.classList.add('active');
     this.panel.hidden = false;
+    this.textInput.show();
     this.layoutChanged();
   }
 
-  /// Also hides the iOS keyboard and clears modifiers and the fn layer.
+  /// Also hides the text field and the iOS keyboard, and clears modifiers and the fn layer.
   close() {
     if (!this.isOpen()) return;
     this.stopRepeat();
     this.closeMenu();
     this.panel.hidden = true;
     this.toggleButton.classList.remove('active');
-    this.textInput.blur();
+    this.textInput.hide();
     this.modifiers.reset();
     if (this.fnLayer) { this.fnLayer = false; this.render(); }
     this.layoutChanged();
@@ -106,7 +105,6 @@ export class KeyPanel {
     this.closeMenu();
     this.panel.textContent = '';
     this.modButtons = [];
-    this.textButton = null;
     this.moreButton = null;
     for (const spec of this.fnLayer ? FN : NORMAL) {
       const b = document.createElement('button');
@@ -115,8 +113,7 @@ export class KeyPanel {
       b.textContent = spec.label;
       if (spec.wide) b.classList.add('wide');
       if (spec.combo) b.classList.add('combo');
-      if (spec.text) this.wireText(b);
-      else if (spec.more) { b.classList.add('more'); this.moreButton = b; this.wireTap(b, () => this.toggleMenu()); }
+      if (spec.more) { b.classList.add('more'); this.moreButton = b; this.wireTap(b, () => this.toggleMenu()); }
       else this.wirePress(b, spec);
       if (spec.mod) { b.dataset.mod = spec.mod; this.modButtons.push(b); }
       if (spec.fn) b.classList.toggle('active', this.fnLayer);
@@ -131,20 +128,6 @@ export class KeyPanel {
       b.classList.toggle('active', s !== 'off');
       b.classList.toggle('locked', s === 'locked');
     }
-  }
-
-  /// The text key toggles the iOS keyboard. The touch never takes focus from the field, and
-  /// focus() runs in touchend, a user gesture, so iOS shows the keyboard.
-  wireText(b) {
-    const toggle = () => {
-      if (this.textInput.isFocused()) this.textInput.blur(); else this.textInput.focus();
-    };
-    b.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-    b.addEventListener('touchend', (e) => { e.preventDefault(); toggle(); });
-    b.addEventListener('mousedown', (e) => e.preventDefault());
-    b.addEventListener('click', toggle); // no touch: mouse or keyboard
-    b.classList.toggle('active', this.textInput.isFocused());
-    this.textButton = b;
   }
 
   isMenuOpen() { return this.menu !== null; }
