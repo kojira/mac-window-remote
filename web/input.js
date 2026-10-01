@@ -1,27 +1,27 @@
 // iPhone text input: compose on the phone, send on Return (DESIGN.md D10, D34).
 // Active key-panel modifiers apply to Return, Backspace, and single typed characters.
 // The field is a textarea that wraps and grows with its text, up to a cap (D53).
+// The bar's typing layout follows the key panel being open (show/hide) or the field having
+// focus (D54); showing the field never focuses it, so the iOS keyboard stays down.
 import { charKeyName } from './modifiers.js';
 
 export class TextInput {
   /// dock: the key panel and bottom bar, kept above the iOS keyboard.
-  /// modifiers: the key panel's ModifierState. onFocusChange(focused) is set by the panel.
+  /// modifiers: the key panel's ModifierState.
   constructor({ field, bar, dock, modifiers, send }) {
     this.field = field;
     this.bar = bar;
     this.modifiers = modifiers;
     this.send = send;
-    this.onFocusChange = () => {};
+    this.shown = false;
 
     field.addEventListener('focus', () => {
       bar.classList.add('typing');
       this.fitHeight();
-      this.onFocusChange(true);
     });
     field.addEventListener('blur', () => {
-      bar.classList.remove('typing');
+      bar.classList.toggle('typing', this.shown);
       this.fitHeight();
-      this.onFocusChange(false);
     });
 
     field.addEventListener('keydown', (e) => {
@@ -116,8 +116,20 @@ export class TextInput {
     this.send({ t: 'key', key, mods: this.modifiers.consume() });
   }
 
-  /// Inside a tap handler, so iOS shows the keyboard.
-  focus() { this.field.focus(); }
+  /// D54: the bar shows the field (the typing layout) without focusing it.
+  show() {
+    this.shown = true;
+    this.bar.classList.add('typing');
+    this.fitHeight();
+  }
+
+  /// Blurs the field and restores the normal bar.
+  hide() {
+    this.shown = false;
+    this.blur();
+    this.bar.classList.remove('typing');
+    this.fitHeight();
+  }
 
   blur() { this.field.blur(); }
 

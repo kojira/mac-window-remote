@@ -85,7 +85,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .slot.empty { font-size: 22px; color: #888; }
 .slot.unavailable { opacity: 0.35; }
 .slot.current { border-color: #0a84ff; }
-/* While typing, the text field takes the place of the slots and Fit (D33). */
+/* While typing or with the key panel open (D54), the text field takes the place of the slots and Fit (D33). */
 #bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window,
 #bottom-bar.typing #audio-mode, #bottom-bar.typing #app-menu { display: none; }
 /* D53: a one-row textarea that wraps (no horizontal scroll); TextInput sets its height. */

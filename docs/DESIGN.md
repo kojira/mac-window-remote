@@ -1341,6 +1341,8 @@ On a real iPhone against the real Mac:
 > *Amended by §16 D36:* the normal layer has a third row, 📋 Paste and 🖼 Image.
 > *Amended by §17 D37:* that third row starts with ⌘F1 and ⌘Tab.
 > *Amended by §21 D41:* that third row is ⌘F1, ⌘Tab, space, ⏎, ⋯ (Paste, Image, ⌘Q menu).
+> *Amended by §32 D54:* the **text** key is gone; ⌫ (Backspace) takes its place, and ⌨︎
+> itself shows the text field (without the iOS keyboard).
 - **Why (user request, with a reference image):** the iOS keyboard cannot type Esc, Tab,
   arrows, F-keys, or ⌘/⌃/⌥ shortcuts such as ⌘C, ⌘V, and ⌃C. The panel gives those keys
   large targets. Custom buttons (D13) are not part of this step.
@@ -2343,6 +2345,7 @@ The viewer may be an iPhone or a PC browser; the UI says "this device", never "i
 ## 31. The text field wraps and grows (user decision, Issue #39; amends D10)
 
 ### D53. The text field is a one-row textarea that grows with its text
+> *Amended by §32 D54:* the **text** key is gone; ⌨︎ shows the field and a tap on the field focuses it.
 
 A one-line `<input>` hid text past its width, so after moving the caret to the start of a long text the user could not see it until typing.
 
@@ -2358,3 +2361,17 @@ A one-line `<input>` hid text past its width, so after moving the caret to the s
 3. Return sends the text without a newline and the field shrinks to one line; empty + Return sends Enter; empty + Backspace sends Backspace; Japanese IME conversion and dictation still work and send nothing while composing.
 4. *PC browser:* ⌨︎ → text → type a long text: it wraps and grows; Return sends as before; after leaving the field, physical keys go to the Mac again.
 5. *Unit:* `tests/web/textinput.test.mjs`: growth, the 8-line and 40% caps, shrink after send and clear, and the Enter/Backspace/composing rules with a textarea.
+
+## 32. ⌫ in the key panel; ⌨︎ shows the text field (user decision, Issue #41; amends D34, D53)
+
+### D54. ⌫ replaces the text key, and ⌨︎ opens the text-entry layout
+
+- **Panel.** The normal layer's top-right key **text** becomes **⌫**, which sends `key Backspace`. It repeats while held like the arrows (D34 timing) and takes the one-shot modifiers, so ⌥⌫ and ⌘⌫ work. Normal layer: esc ⇧ tab fn ↑ ⌫ / ⌃ ⌘ ⌥ ← ↓ → / ⌘F1 ⌘W space ⏎ ⋯. The fn layer is unchanged.
+- **⌨︎.** Opening the panel also puts the bottom bar in the typing layout (‹, ⌨︎, and the text field; the slots, Fit, 📱, 🔊 and ☰ hidden) **without focusing the field**, so the iOS keyboard stays down. Tapping the field focuses it and the keyboard appears; D10 send rules and D53 growth apply. The layout follows the panel: blurring the field (the keyboard's hide) keeps it. ⌨︎ again, or leaving the viewer, closes the panel, blurs the field, and restores the normal bar. `TextInput.show()`/`hide()` set "field visible" apart from focus.
+- **PC browser (D45).** The same; opening the panel does not focus the field, so physical keys still go to the Mac through the key sink. Clicking the field focuses it (keys stay in it); leaving it returns forwarding.
+
+### D54 acceptance criteria
+1. *iPhone:* ⌨︎ opens the panel with ⌫ at the top right and the text field in the bar; no iOS keyboard appears. Tapping the field brings up the keyboard; hiding the keyboard keeps the field and panel; ⌨︎ again restores ‹, slots, Fit, 📱, 🔊, ☰.
+2. ⌫ deletes a character on the Mac; holding it repeats after about 0.4 s; ⌥ then ⌫ deletes a word, ⌘ then ⌫ deletes to line start.
+3. *PC browser:* ⌨︎ shows the field; typing on the physical keyboard still goes to the Mac until the field is clicked; leaving the field forwards again.
+4. *Unit:* `tests/web/keypanel.test.mjs` (layout, ⌫ repeat and modifiers, show/hide, desktop forwarding with the field unfocused) and `tests/web/textinput.test.mjs` (show without focus, blur keeps the layout, hide restores it).

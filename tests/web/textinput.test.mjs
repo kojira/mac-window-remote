@@ -178,3 +178,33 @@ test('blur shrinks the hidden field back to its one-line height', () => {
   field.blur();
   assert.equal(field.style.height, '');
 });
+
+test('show() gives the typing layout without focusing the field (D54)', () => {
+  const { field, bar, ti } = setup();
+  ti.show();
+  assert.ok(bar.classList.contains('typing'));
+  assert.equal(document.activeElement, null, 'not focused: the iOS keyboard stays down');
+  assert.equal(ti.isFocused(), false);
+});
+
+test('blurring the field keeps the typing layout while shown; without show() it drops it (D54)', () => {
+  const { field, bar, ti } = setup();
+  field.focus();
+  field.blur();
+  assert.ok(!bar.classList.contains('typing'), 'not shown: focus alone sets the layout');
+  ti.show();
+  field.focus();
+  field.blur();
+  assert.ok(bar.classList.contains('typing'), 'shown: the layout stays after the keyboard hides');
+});
+
+test('hide() blurs the field and restores the normal bar (D54)', () => {
+  const { field, bar, ti, type } = setup();
+  ti.show();
+  field.focus();
+  type('x'.repeat(100), 4);
+  ti.hide();
+  assert.equal(document.activeElement, null);
+  assert.ok(!bar.classList.contains('typing'));
+  assert.equal(field.style.height, '');
+});
