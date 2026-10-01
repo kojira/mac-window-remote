@@ -945,7 +945,7 @@ file.
   now), and posts `mouseMoved`, or `leftMouseDragged` while the drag lock is held.
   - The cursor therefore never leaves the target window, and a window moved on the Mac
     keeps the cursor at the same place inside it.
-- **Overlay:** the phone draws a cursor arrow over the `<video>` at `(cu, cv)`.
+- **Overlay:** the phone draws a cursor arrow over the `<video>` at `(cu, cv)`. It is white with a black outline, like the Mac's arrow, so it stays visible on white and dark windows.
   - The client predicts locally: it applies each sent delta immediately, with the same
     clamp, so the arrow moves with the finger at display rate.
   - The server confirms: on `control` it sends `{t:"cursor", u, v, seq}` after each
