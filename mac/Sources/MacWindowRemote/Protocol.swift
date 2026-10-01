@@ -94,8 +94,8 @@ enum ClientMessage: Equatable {
     case menuList
     /// Press the item `id` of listing `gen` (D43).
     case menuPress(id: String, gen: Int)
-    /// A folder listing (D47); `path` is absolute or starts with `~`.
-    case filesList(id: String, path: String, hidden: Bool)
+    /// A folder listing (D47) in `sort` order (D55); `path` is absolute or starts with `~`.
+    case filesList(id: String, path: String, hidden: Bool, sort: FileSort)
     /// File-name search under `base` (D47).
     case filesSearch(id: String, base: String, query: String, hidden: Bool)
     /// A one-time download URL for exactly these absolute paths (D47).
@@ -163,6 +163,8 @@ extension ClientMessage {
         let base: String?
         let q: String?
         let paths: [String]?
+        let sort: String?
+        let desc: Bool?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -299,7 +301,12 @@ extension ClientMessage {
         case "files.list":
             let path = try require(e.path, "path")
             guard !path.isEmpty, path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
-            return .filesList(id: try requestId(), path: path, hidden: e.hidden ?? false)
+            var sort = FileSort.name
+            if let raw = e.sort {
+                guard let key = FileSort.Key(rawValue: raw) else { throw ProtocolError.invalidValue("sort") }
+                sort = FileSort(key: key, descending: e.desc ?? false)
+            }
+            return .filesList(id: try requestId(), path: path, hidden: e.hidden ?? false, sort: sort)
         case "files.search":
             let base = try require(e.base, "base")
             let query = try require(e.q, "q")

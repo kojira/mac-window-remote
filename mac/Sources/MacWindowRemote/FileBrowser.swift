@@ -16,6 +16,17 @@ struct FileEntry: Encodable, Equatable, Sendable {
     var parent: String?
 }
 
+/// The listing order the client asked for (D55). Folders stay first; ties and folders under
+/// `size` fall back to the name order; a missing size or date goes last in either direction.
+struct FileSort: Equatable, Sendable {
+    enum Key: String, Sendable { case name, mtime, size }
+    var key: Key
+    var descending: Bool
+
+    /// The D47 order, used when a request names no sort.
+    static let name = FileSort(key: .name, descending: false)
+}
+
 struct FileListing: Equatable, Sendable {
     /// The folder as the client names it (standardized, symlinks kept).
     var path: String
@@ -114,20 +125,42 @@ enum FileBrowser {
                          mtime: mtime, link: isLink, parent: nil)
     }
 
-    /// Folders first, then by name (localized, case-insensitive).
-    static func sorted(_ entries: [FileEntry]) -> [FileEntry] {
-        entries.sorted { a, b in
-            if a.dir != b.dir { return a.dir }
+    /// Folders first, then by `sort` (D55); ties by name (localized, case-insensitive).
+    static func sorted(_ entries: [FileEntry], by sort: FileSort = .name) -> [FileEntry] {
+        func nameAscending(_ a: FileEntry, _ b: FileEntry) -> Bool {
             let order = a.name.localizedCaseInsensitiveCompare(b.name)
             return order == .orderedSame ? a.name < b.name : order == .orderedAscending
+        }
+        // Missing values go last in both directions.
+        func byValue(_ x: Double?, _ y: Double?) -> Bool? {
+            switch (x, y) {
+            case (nil, nil): return nil
+            case (nil, _): return false
+            case (_, nil): return true
+            case let (x?, y?): return x == y ? nil : (sort.descending ? x > y : x < y)
+            }
+        }
+        return entries.sorted { a, b in
+            if a.dir != b.dir { return a.dir }
+            switch sort.key {
+            case .name:
+                return sort.descending ? nameAscending(b, a) : nameAscending(a, b)
+            case .mtime:
+                return byValue(a.mtime, b.mtime) ?? nameAscending(a, b)
+            case .size:
+                if a.dir { return nameAscending(a, b) }
+                return byValue(a.size.map(Double.init), b.size.map(Double.init)) ?? nameAscending(a, b)
+            }
         }
     }
 
     static func isHidden(_ name: String) -> Bool { name.hasPrefix(".") }
 
-    /// The folder's entries, sorted, dot-files left out unless `showHidden`, at most `limit`.
+    /// The folder's entries in `sort` order, dot-files left out unless `showHidden`, at most
+    /// `limit`: sorted before the cap, so a huge folder sends the first rows of that order.
     /// A symlinked folder is listed through its target.
-    static func list(path raw: String, home: String, showHidden: Bool, limit: Int = maxEntries) throws -> FileListing {
+    static func list(path raw: String, home: String, showHidden: Bool, sort: FileSort = .name,
+                     limit: Int = maxEntries) throws -> FileListing {
         guard let path = resolve(raw, home: home) else { throw FileBrowserError.badPath }
         var st = stat()
         guard stat(path, &st) == 0 else { throw errorFromErrno(errno) }
@@ -143,7 +176,7 @@ enum FileBrowser {
         let entries = names.lazy
             .filter { showHidden || !isHidden($0) }
             .compactMap { entry(path: join(path, $0), name: $0) }
-        let all = sorted(Array(entries))
+        let all = sorted(Array(entries), by: sort)
         return FileListing(path: path, entries: Array(all.prefix(limit)), total: all.count)
     }
 

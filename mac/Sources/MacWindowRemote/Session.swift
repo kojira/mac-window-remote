@@ -384,8 +384,8 @@ actor Session {
             await listMenu()
         case .menuPress(let id, let gen):
             await pressMenu(id: id, gen: gen)
-        case .filesList(let id, let path, let hidden):
-            await listFiles(id: id, path: path, hidden: hidden)
+        case .filesList(let id, let path, let hidden, let sort):
+            await listFiles(id: id, path: path, hidden: hidden, sort: sort)
         case .filesSearch(let id, let base, let query, let hidden):
             searchFiles(id: id, base: base, query: query, hidden: hidden)
         case .downloadRequest(let id, let paths):
@@ -397,9 +397,9 @@ actor Session {
 
     private static let home = NSHomeDirectory()
 
-    private func listFiles(id: String, path: String, hidden: Bool) async {
+    private func listFiles(id: String, path: String, hidden: Bool, sort: FileSort) async {
         let outcome = await Task.detached(priority: .userInitiated) { () -> Result<FileListing, FileBrowserError> in
-            Result { try FileBrowser.list(path: path, home: Session.home, showHidden: hidden) }
+            Result { try FileBrowser.list(path: path, home: Session.home, showHidden: hidden, sort: sort) }
                 .mapError { $0 as? FileBrowserError ?? .noAccess }
         }.value
         switch outcome {
