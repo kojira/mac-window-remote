@@ -36,7 +36,8 @@ export class VideoLink {
     this.pendingIce = [];
     this.transceiver = pc.addTransceiver('video', { direction: 'recvonly' });
     // D39: Mac audio; played by a separate <audio> element, never by the muted <video>.
-    this.audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
+    // D57: sendrecv from the start, so 🎤 only swaps the track (replaceTrack), without a new offer.
+    this.audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
     this.motion = pc.createDataChannel('motion', { ordered: false, maxRetransmits: 0 });
     this.control = pc.createDataChannel('control');
     this.control.onmessage = (e) => {
@@ -158,6 +159,12 @@ export class VideoLink {
   retry() {
     this.retried = false;
     this.start();
+  }
+
+  /// D57: this device's microphone track (or null) on the audio transceiver.
+  async setMicTrack(track) {
+    if (!this.audioTransceiver || !this.pc) return;
+    await this.audioTransceiver.sender.replaceTrack(track);
   }
 
   /// An input message on the channel that carries it; false if that channel is not open.

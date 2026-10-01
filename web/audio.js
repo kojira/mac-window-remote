@@ -83,6 +83,8 @@ export class AudioOutput {
     this.stream = new MediaStream();
     element.srcObject = this.stream;
     this.unlocked = false;
+    // D57: while the microphone is on, iOS must keep recording, so the session plays and records.
+    this.sessionType = 'playback';
     this.onChange = () => {};
   }
 
@@ -100,7 +102,7 @@ export class AudioOutput {
   /// unlocked. Calls onChange when that is known.
   play() {
     if (navigator.audioSession) {
-      try { navigator.audioSession.type = 'playback'; } catch { /* older Safari */ }
+      try { navigator.audioSession.type = this.sessionType; } catch { /* older Safari */ }
     }
     let p;
     try { p = this.element.play(); } catch { p = Promise.reject(new Error('play')); }
