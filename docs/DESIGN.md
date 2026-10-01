@@ -7,7 +7,7 @@ viewer's top bar with a bottom bar that has quick-switch slots. §14 (D34) repla
 D13 key bar with a key panel. §15 (D35) adds resizing the Mac window to fit the phone.
 §16 (D36) adds pasting the iPhone clipboard or an image; §17 (D37) adds ⌘F1 and ⌘Tab keys (§27 D48 swaps ⌘Tab for ⌘W).
 §19 (D39) plays the Mac's audio on the iPhone; §20 (D40) adds an Apps launcher tab. §23 (D45) adds
-a desktop browser's mouse and keyboard.** Sections marked *Superseded by §11* describe
+a desktop browser's mouse and keyboard; §29 (D51) sends text copied on the Mac to the viewing device.** Sections marked *Superseded by §11* describe
 slice 1 behavior that revision 2 removes. This file is the source of truth for the
 implementation. If the implementation discovers a fact that contradicts this
 document, stop the affected work, update this document first, then continue.
@@ -2302,3 +2302,20 @@ Acceptance: ⌘W in the key panel closes the Mac's front window of the viewed ap
 A trackpad pinch in desktop browsers arrives as a `wheel` event with `ctrlKey` set, which D45 only swallowed. It now zooms the phone-style view (the same `zoomBy` as a two-finger pinch, clamped to Fit … 8×) around the pointer, by `exp(-deltaY × 0.01)` per event with deltaY capped at ±100 px. Ctrl + mouse wheel zooms the same way. Fit resets. Nothing is sent to the Mac.
 
 Acceptance: in a desktop browser, a trackpad pinch-out zooms in at the pointer and pinch-in zooms out down to Fit; the page itself does not zoom; plain wheel still scrolls the Mac window.
+
+## 29. Text copied on the Mac reaches this device (user decision, Issue #35; the reverse of D36)
+
+### D51. The Mac's clipboard text goes to the viewing device's clipboard
+
+The viewer may be an iPhone or a PC browser; both are supported and the UI says "this device".
+
+- **Mac.** Only while a session is connected, a background task reads `NSPasteboard.general.changeCount` every 0.5 s. The count at connect is the baseline, so whatever was on the clipboard before is never sent. On a change it reads only the `.string` type; it skips the change if there is no text, if the item carries `org.nspasteboard.ConcealedType` or `org.nspasteboard.TransientType` (password managers), or if the change is our own D36 paste (the paste records the change count it produced). Text over 1 MiB of UTF-8 (the D11 limit) is not sent; the message says `truncated` instead. The policy is `MacClipboardWatch` (`MacClipboard.swift`) with the pasteboard behind `PasteboardReading`, so tests use a fake.
+- **Wire.** `{"t":"clipboard.mac","seq":n,"text":"…"}` or `{"t":"clipboard.mac","seq":n,"truncated":true}` on the WebSocket (`seq` counts sent copies per session).
+- **Web (`web/macclip.js`).** On `clipboard.mac` the page calls `navigator.clipboard.writeText` at once. A focused desktop browser usually allows it: toast "📋 Copied from the Mac". If it is refused (iOS Safari needs a user gesture; any browser while the page is not focused), a banner floats just above the dock (key panel or bottom bar), not over their buttons: "📋 Copied on the Mac: “<first 40 chars>…” — Tap to copy here" with ✕. Tapping or clicking it calls `writeText` inside the gesture (falling back to a selected textarea and `execCommand('copy')`), toasts "Copied", and hides it. A newer copy replaces the banner; ✕ dismisses it. `truncated` toasts that the copy was too large.
+- **Limits.** Text only (no images, files, or rich text). At most 1 MiB. Concealed/transient items are never sent. Copies made while no device is connected are not sent later. macOS may show a paste-permission prompt on the Mac the first time the app reads the pasteboard; the app reads only after a change, while a viewer is connected.
+
+### D51 acceptance criteria
+1. *iPhone (Safari or Home Screen):* while viewing, copy text on the Mac (⌘C, or ⌘C from the key panel); within about a second the banner appears above the bottom bar (above the key panel when it is open) without covering its buttons. Tapping it puts the text on the iPhone clipboard ("Copied"); pasting in another iPhone app gives the same text, including Japanese and line breaks. ✕ dismisses it; a second copy on the Mac replaces the first.
+2. *PC browser (Chrome or Safari, page focused):* copying on the Mac shows "📋 Copied from the Mac" and the text pastes in another app on the PC. With the page unfocused, the banner appears and a mouse click on it copies.
+3. The clipboard content from before connecting is not sent; pasting from the device (📋 Paste, D36) does not come back as a banner; a password copied from a password manager that marks it concealed is not sent; copying an image sends nothing; text over 1 MiB shows "too large".
+4. *Unit:* `MacClipboardWatch` with a fake pasteboard (baseline, change, own paste, concealed/transient, 1 MiB cap) and `clipboard.mac` encoding; web toast vs banner, tap to copy with fallback, newer replaces, ✕.
