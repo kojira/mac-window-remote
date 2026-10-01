@@ -10,7 +10,7 @@
 
 - **One window, full focus:** pick any Mac window and use it on your iPhone (or a PC browser) as sharp, low-latency video, with a trackpad-style pointer, keyboard, shortcuts, and menus.
 - **Private by design:** it runs only inside your own Tailscale network, with no cloud relay, no accounts, and no pairing codes.
-- **More than a mirror:** the Mac's sound on your phone, plug-in and floating windows included, and files downloaded or uploaded in a tap.
+- **More than a mirror:** the Mac's sound on your phone, plug-in and floating windows included, copy on the Mac and paste on your device, and files downloaded or uploaded in a tap.
 
 ## What you can do with it
 
@@ -37,7 +37,7 @@
 
 ## Status
 
-**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Clipboard text, image upload, and custom key buttons are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Custom key buttons are a later slice. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Honest constraints
 
