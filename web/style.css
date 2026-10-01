@@ -50,9 +50,11 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #viewer-overlay button { display: block; margin: 10px auto 0; pointer-events: auto; }
 /* Cursor overlay (D24): an arrow whose tip is at the Mac cursor. */
 #cursor { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
-#cursor::before { content: ""; position: absolute; left: 0; top: 0; width: 14px; height: 20px;
-  background: #fff; clip-path: polygon(0 0, 0 100%, 30% 75%, 55% 100%, 70% 92%, 47% 68%, 100% 68%);
-  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000); }
+/* A white arrow with a black outline, like the Mac's, so it shows on light and dark windows.
+   The tip (1.5, 1.5) is shifted onto the Mac cursor point. */
+#cursor::before { content: ""; position: absolute; left: -1.5px; top: -1.5px; width: 18px; height: 24px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 24'%3E%3Cpath d='M1.5 1.5 V20.5 L6 16.5 L9.2 23 L12.4 21.5 L9.3 15.3 H15.5 Z' fill='%23fff' stroke='%23000' stroke-width='1.6' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat 0 0 / 100% 100%;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.45)); }
 /* D45: receives physical keys and IME on a desktop; kept on screen (IMEs place their candidate
    window at it) but invisible and outside the stage's input. */
 #key-sink { position: absolute; left: 8px; bottom: calc(64px + env(safe-area-inset-bottom)); width: 1px; height: 1px;
