@@ -2250,6 +2250,7 @@ Acceptance: in a desktop browser a click on 🔊 cycles Off → App → All and 
 ## 26. Download files from the Mac (user decision, Issue #23)
 
 ### D47. ⬇︎ Download in the ⋯ menu: a file browser, name search, and one-time download links
+> *Amended by §33 D55:* the rows can be sorted by Name, Modified, or Size; the default is Modified, newest first.
 - **Entry.** ⋯ → ⬇︎ Download (after 📎 File) opens a full-height sheet (touch and mouse). It starts
   at the home folder (then where it was last). Quick places: Home, Desktop, Documents,
   Downloads, Computer (`/`), and each `/Volumes/*` except the boot-disk link. A breadcrumb
@@ -2375,3 +2376,19 @@ A one-line `<input>` hid text past its width, so after moving the caret to the s
 2. ⌫ deletes a character on the Mac; holding it repeats after about 0.4 s; ⌥ then ⌫ deletes a word, ⌘ then ⌫ deletes to line start.
 3. *PC browser:* ⌨︎ shows the field; typing on the physical keyboard still goes to the Mac until the field is clicked; leaving the field forwards again.
 4. *Unit:* `tests/web/keypanel.test.mjs` (layout, ⌫ repeat and modifiers, show/hide, desktop forwarding with the field unfocused) and `tests/web/textinput.test.mjs` (show without focus, blur keeps the layout, hide restores it).
+
+## 33. Sort the Download list (user decision, Issue #43; amends D47)
+
+### D55. Name, Modified, or Size, remembered on the device
+
+- **Control.** Under the quick places: "Sort:" **Name**, **Modified**, **Size** (touch and mouse). The active one is highlighted and shows ↑ or ↓; tapping it again reverses the order. A newly chosen key starts A→Z (Name), newest first (Modified), or largest first (Size). Default: Modified ↓.
+- **Order.** Folders always come first, sorted by the same key among themselves. Under Size, folders have no size, so they are sorted by name. A missing date or size (a broken link) goes last in both directions. Ties fall back to the D47 name order (localized, case-insensitive).
+- **Where.** The page sorts the rows it received (`sortEntries` in `web/files.js`). The choice is stored in `localStorage` (`mwr.fileSort`) and applies to every folder, later openings, and search results.
+- **Listing cap.** `files.list` carries `"sort":"name"|"mtime"|"size"` and `"desc":bool` (omitted: name ascending, as in D47). The Mac sorts the whole folder in that order before it cuts the list at 5,000 rows, so in a larger folder "newest first" shows the newest. Changing the sort of a capped listing asks the Mac again; a complete listing is only re-sorted on the device.
+- **Search.** Results are still found in walk order and stop at 500 (or about 5 s). The page sorts the results it received, so with more than 500 matches, the sorted results may not be the 500 newest or largest.
+
+### D55 acceptance criteria
+1. *iPhone and PC browser:* ⬇︎ Download opens with "Modified ↓" active and the newest files first, below the folders. Tapping Modified shows ↑ and the oldest first. Name gives A→Z, and Size gives the largest first, with folders on top by name.
+2. Close and reopen the sheet, open another folder, or reload the page: the chosen sort stays. Search results appear in the same order.
+3. In a folder with more than 5,000 items, Modified ↓ shows the newest items in the folder, and Size ↓ shows the largest.
+4. *Unit:* `tests/web/files.test.mjs` covers the comparator (all keys and both directions, folders on top, ties, and missing values last), toggling, persistence, and the default. It also checks that a capped listing is requested again. `FileBrowserTests` covers sorting before the cap in a temporary folder with set modification dates, and `ProtocolTests` covers decoding `sort`/`desc`.
