@@ -1,5 +1,5 @@
 // Unit tests for ⬇︎ Download (DESIGN.md D47): the file sheet's listing, selection bar,
-// search with its base path, errors, and the one-time download URL.
+// search with its base path, errors, and the one-time download URL; D55: the sort.
 // A small fake DOM stands in for the browser. Run: node --test tests/web
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,7 +32,8 @@ class FakeElement {
 
 globalThis.document = { createElement: (tag) => new FakeElement(tag) };
 const {
-  FileSheet, breadcrumbs, decodeFiles, formatSize, parentPath, selectionSummary,
+  FileSheet, breadcrumbs, compareEntries, decodeFiles, formatSize, parentPath, selectionSummary, sortEntries,
+  SORT_STORAGE_KEY,
 } = await import('../../web/files.js');
 
 const HOME = '/home/u';
@@ -43,7 +44,12 @@ const LISTING = [
   { name: 'b.bin', path: `${HOME}/b.bin`, dir: false, size: 1000, mtime: 0, link: false },
 ];
 
-function setup() {
+function fakeStorage(initial = {}) {
+  const data = { ...initial };
+  return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => { data[k] = String(v); } };
+}
+
+function setup(storage = fakeStorage()) {
   const root = new FakeElement('div');
   root.hidden = true;
   const sent = [];
@@ -53,6 +59,7 @@ function setup() {
     root,
     send: (m) => { if (connected) sent.push(m); return connected; },
     download: (url, name) => downloads.push([url, name]),
+    storage,
   });
   const last = () => sent[sent.length - 1];
   const rows = () => sheet.list.children.filter((c) => c.className.startsWith('files-row'));
@@ -61,7 +68,7 @@ function setup() {
   const reply = (entries = LISTING, extra = {}) => sheet.onFiles({
     t: 'files', id: last().id, path: HOME, entries, total: entries.length, truncated: false, places: PLACES, ...extra,
   });
-  return { root, sheet, sent, downloads, last, rows, notes, rowNamed, reply, disconnect: () => { connected = false; } };
+  return { storage, root, sheet, sent, downloads, last, rows, notes, rowNamed, reply, disconnect: () => { connected = false; } };
 }
 
 test('helpers: sizes, parent paths, breadcrumbs, and the selection summary', () => {
@@ -84,7 +91,7 @@ test('opens at home with a files.list request, then shows places, crumbs and row
   const { root, sheet, sent, rows, reply, rowNamed } = setup();
   sheet.open();
   assert.equal(root.hidden, false);
-  assert.deepEqual(sent[0], { t: 'files.list', id: sent[0].id, path: '~', hidden: false });
+  assert.deepEqual(sent[0], { t: 'files.list', id: sent[0].id, path: '~', hidden: false, sort: 'mtime', desc: true });
   assert.equal(sheet.list.children[0].label, 'Loading…');
   assert.equal(reply(), true);
   assert.deepEqual(sheet.placesBar.children.map((b) => b.label), ['Home', 'Desktop', 'Computer']);
@@ -105,7 +112,7 @@ test('a folder row opens it; ‹ and a breadcrumb go up', () => {
   sheet.open();
   reply();
   rowNamed('Docs').children[1].dispatch('click');
-  assert.deepEqual(last(), { t: 'files.list', id: last().id, path: `${HOME}/Docs`, hidden: false });
+  assert.deepEqual(last(), { t: 'files.list', id: last().id, path: `${HOME}/Docs`, hidden: false, sort: 'mtime', desc: true });
   sheet.onFiles({ t: 'files', id: last().id, path: `${HOME}/Docs`, entries: [], places: PLACES });
   assert.deepEqual(sheet.list.children.map((c) => c.label), ['Empty folder']);
   sheet.up.dispatch('click');
@@ -219,4 +226,83 @@ test('not connected: the sheet says so instead of loading forever', () => {
   disconnect();
   sheet.open();
   assert.deepEqual(notes(), ['Not connected to the Mac']);
+});
+
+// D55: sorting the list.
+const E = (name, { dir = false, size = null, mtime = null } = {}) => ({ name, path: `/x/${name}`, dir, size, mtime });
+const names = (entries, sort) => sortEntries(entries, sort).map((e) => e.name);
+const SORTABLE = [
+  E('b.txt', { size: 10, mtime: 300 }),
+  E('A.txt', { size: 30, mtime: 100 }),
+  E('c.txt', { size: 20, mtime: 200 }),
+  E('zdir', { dir: true, mtime: 50 }),
+  E('Adir', { dir: true, mtime: 500 }),
+];
+
+test('sort: every key in both directions, folders on top', () => {
+  assert.deepEqual(names(SORTABLE, { key: 'name', desc: false }), ['Adir', 'zdir', 'A.txt', 'b.txt', 'c.txt']);
+  assert.deepEqual(names(SORTABLE, { key: 'name', desc: true }), ['zdir', 'Adir', 'c.txt', 'b.txt', 'A.txt']);
+  assert.deepEqual(names(SORTABLE, { key: 'mtime', desc: true }), ['Adir', 'zdir', 'b.txt', 'c.txt', 'A.txt']);
+  assert.deepEqual(names(SORTABLE, { key: 'mtime', desc: false }), ['zdir', 'Adir', 'A.txt', 'c.txt', 'b.txt']);
+  // Folders have no size: by name in both directions.
+  assert.deepEqual(names(SORTABLE, { key: 'size', desc: true }), ['Adir', 'zdir', 'A.txt', 'c.txt', 'b.txt']);
+  assert.deepEqual(names(SORTABLE, { key: 'size', desc: false }), ['Adir', 'zdir', 'b.txt', 'c.txt', 'A.txt']);
+});
+
+test('sort: ties by case-insensitive name; a missing size or date goes last either way', () => {
+  const rows = [E('b', { size: 5, mtime: 9 }), E('none'), E('A', { size: 5, mtime: 9 }), E('c', { size: 7, mtime: 1 })];
+  assert.deepEqual(names(rows, { key: 'size', desc: true }), ['c', 'A', 'b', 'none']);
+  assert.deepEqual(names(rows, { key: 'size', desc: false }), ['A', 'b', 'c', 'none']);
+  assert.deepEqual(names(rows, { key: 'mtime', desc: true }), ['A', 'b', 'c', 'none']);
+  assert.deepEqual(names(rows, { key: 'mtime', desc: false }), ['c', 'A', 'b', 'none']);
+  assert.equal(compareEntries({ key: 'name', desc: false })(E('a'), E('B')) < 0, true);
+});
+
+test('sort control: defaults to Modified ↓, tapping toggles or switches, and the choice is remembered', () => {
+  const { sheet, sent, reply, rows, storage } = setup();
+  const labels = () => sheet.sortButtons && Object.values(sheet.sortButtons).map((b) => b.label);
+  const rowNames = () => rows().map((r) => r.children[1].children[1].children[0].label);
+  sheet.open();
+  reply(SORTABLE);
+  assert.deepEqual(labels(), ['Name', 'Modified ↓', 'Size']);
+  assert.deepEqual(rowNames(), ['Adir', 'zdir', 'b.txt', 'c.txt', 'A.txt']);
+  const before = sent.length;
+  sheet.sortButtons.mtime.dispatch('click');
+  assert.deepEqual(labels(), ['Name', 'Modified ↑', 'Size']);
+  assert.deepEqual(rowNames(), ['zdir', 'Adir', 'A.txt', 'c.txt', 'b.txt']);
+  assert.equal(sent.length, before, 'a complete listing is re-sorted without asking the Mac');
+  sheet.sortButtons.name.dispatch('click');
+  assert.deepEqual(labels(), ['Name ↑', 'Modified', 'Size']);
+  sheet.sortButtons.size.dispatch('click');
+  assert.deepEqual(labels(), ['Name', 'Modified', 'Size ↓']);
+  assert.equal(sheet.sortButtons.size.attrs['aria-pressed'], 'true');
+  assert.deepEqual(JSON.parse(storage.data[SORT_STORAGE_KEY]), { key: 'size', desc: true });
+  // Reopening (a new sheet with the same storage) keeps it, and the request carries it.
+  const again = setup(storage);
+  again.sheet.open();
+  assert.deepEqual([again.last().sort, again.last().desc], ['size', true]);
+  // A malformed stored value falls back to Modified ↓.
+  const bad = setup(fakeStorage({ [SORT_STORAGE_KEY]: '{"key":"kind"}' }));
+  bad.sheet.open();
+  assert.deepEqual([bad.last().sort, bad.last().desc], ['mtime', true]);
+});
+
+test('sort: a capped listing is asked for again in the new order; search results use the same order', () => {
+  const { sheet, sent, reply, last, rows } = setup();
+  sheet.open();
+  reply(SORTABLE, { total: 9000, truncated: true });
+  const before = sent.length;
+  sheet.sortButtons.size.dispatch('click');
+  assert.equal(sent.length, before + 1);
+  assert.deepEqual(last(), { t: 'files.list', id: last().id, path: HOME, hidden: false, sort: 'size', desc: true });
+  reply(SORTABLE);
+  sheet.query.value = 'txt';
+  sheet.search();
+  sheet.onFound({ t: 'files.found', id: last().id, base: HOME, entries: SORTABLE.filter((e) => !e.dir) });
+  const found = () => rows().map((r) => r.children[1].children[1].children[0].label);
+  assert.deepEqual(found(), ['A.txt', 'c.txt', 'b.txt']);
+  const searches = sent.length;
+  sheet.sortButtons.name.dispatch('click');
+  assert.deepEqual(found(), ['A.txt', 'b.txt', 'c.txt']);
+  assert.equal(sent.length, searches, 'search results are re-sorted on the device');
 });
