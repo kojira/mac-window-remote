@@ -15,6 +15,7 @@ import {
 } from './displays.js';
 import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
+import { MicControl, micAriaLabel } from './mic.js';
 import {
   CLIPBOARD_MODES, FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages,
   readClipboardForMac, shortPath,
@@ -392,6 +393,31 @@ function onAudioState(msg) {
   }
 }
 
+// ---------- this device's microphone on the Mac (D57) ----------
+
+const mic = new MicControl({
+  getUserMedia: navigator.mediaDevices?.getUserMedia ? (c) => navigator.mediaDevices.getUserMedia(c) : null,
+  setTrack: (track) => link.setMicTrack(track),
+  send: (msg) => link.send(msg),
+  toast,
+  onChange: renderMic,
+});
+
+function renderMic() {
+  const b = $('mic');
+  b.classList.toggle('on', mic.state === 'on');
+  b.classList.toggle('starting', mic.state === 'starting');
+  b.setAttribute('aria-pressed', String(mic.on));
+  b.setAttribute('aria-label', micAriaLabel(mic.state));
+  // iOS keeps recording only in a play-and-record session.
+  audioOutput.sessionType = mic.on ? 'play-and-record' : 'playback';
+  if (navigator.audioSession) {
+    try { navigator.audioSession.type = audioOutput.sessionType; } catch { /* older Safari */ }
+  }
+}
+
+$('mic').addEventListener('click', () => mic.toggle());
+
 // ---------- quick-switch slots (D33) ----------
 
 /// A fresh window list re-resolves the slots; its reply requests the thumbnails. A display in
@@ -618,6 +644,7 @@ function onMessage(msg) {
 /// The peer connection is connected and `control` is open: resume the viewer or the list.
 function onVideoReady() {
   if (!link.send({ t: 'audio', mode: audioMode.resend() })) audioMode.unsent();
+  mic.onReady();
   if (screen === 'viewer' && viewingTarget() != null) {
     viewer.clear();
     viewer.setDimmed(false);
@@ -643,6 +670,9 @@ function onControl(msg) {
       break;
     case 'audio.state':
       onAudioState(msg);
+      break;
+    case 'mic.state':
+      mic.onState(msg);
       break;
     case 'error':
       onError(msg);
@@ -924,6 +954,8 @@ function onUploadReply(msg) {
 // Capture stops when nobody is watching (D15): close when hidden, reconnect when visible.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
+    // D57: the connection closes (D15), so the microphone is released too.
+    mic.stop(false);
     clearTimeout(reconnectTimer);
     closeSocket();
     setConnDots('off');
@@ -1042,5 +1074,6 @@ setListTab(listTab);
 // Earlier versions paired with a stored secret; it is no longer used.
 localStorage.removeItem('mwr.secret');
 renderAudio();
+renderMic();
 unlockAudioOnTouch();
 connect();

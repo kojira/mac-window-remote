@@ -34,6 +34,7 @@
 - ⋯ → **⬇︎ Download** browses the whole Mac filesystem (quick places, breadcrumbs, hidden-files toggle, file-name search, sort by name, date modified, or size) and saves the checked items to the iPhone or PC: one file as is, several items or a folder as one zip (up to 2 GB). It only reads files.
 - Text you copy on the Mac while a device is viewing is offered to that device's clipboard: a focused desktop browser copies it at once, and otherwise a banner "📋 Copied on the Mac — tap to copy here" copies it with one tap (text only, up to 1 MiB; items that password managers mark as concealed are never sent).
 - 🔊 in the bottom bar plays the Mac's sound on the iPhone instead of the Mac's speakers: **App** (the viewed window's app) or **All** (the whole Mac); 🔇 **Off** gives the sound back to the Mac. Needs macOS 14.2 or later.
+- 🎤 in the bottom bar makes this device's microphone (iPhone or PC browser) a microphone on the Mac, for web meetings running on the Mac: it plays into the free [BlackHole](https://github.com/ExistentialAudio/BlackHole) virtual audio device, which the meeting app picks as its microphone. Latency is about 0.1–0.3 s; use earphones while 🔊 is on.
 
 ## Status
 
@@ -82,6 +83,12 @@ The app bundles [WebRTC](https://github.com/stasel/WebRTC) (`WebRTC.framework`, 
 5. On the iPhone, sign in to Tailscale with the **same account as the Mac** (the menu bar shows it as "Allowed: …"), and open the `https://…` address that `tailscale serve` prints in Safari. The window list opens. To use it from the Home Screen, choose Share → **Add to Home Screen**.
 6. Keep the Mac unlocked while you use it remotely.
 7. The first time you turn on 🔊 on the iPhone, macOS asks whether Mac Window Remote may record system audio: click **Allow** (System Settings → Privacy & Security → Screen & System Audio Recording). If the phone says "No audio: allow audio capture…", turn the app on there.
+
+### Using this device's microphone (🎤)
+
+1. Install BlackHole on the Mac once: `brew install blackhole-2ch`, or the installer from the [BlackHole page](https://github.com/ExistentialAudio/BlackHole).
+2. In the meeting app on the Mac (Zoom, Teams, Meet in a browser, …), choose **BlackHole 2ch** as the microphone.
+3. On the device, tap 🎤 and allow the microphone. Tap 🎤 again to stop. Without BlackHole the page says "Install BlackHole on the Mac to use the mic". On an iPhone the microphone stops when the screen locks.
 
 If macOS asks whether **MacWindowRemote** may accept incoming network connections, click **Allow**: the video goes directly between the Mac and the iPhone over UDP on the tailnet (WebRTC), not through `tailscale serve`. After a rebuild, macOS may also ask for Screen Recording and Accessibility again; switch the app's entry off and on in System Settings → Privacy & Security.
 

@@ -52,4 +52,34 @@ import WebRTC
         let silence = [Int16](repeating: 0, count: AudioChunker.chunkFrames)
         silence.withUnsafeBufferPointer { host.audioDevice.deliver($0.baseAddress!) }
     }
+
+    /// D57: a page that offers its audio as sendrecv (the 🎤 transceiver) gets sendrecv back,
+    /// so its microphone reaches the Mac.
+    @Test func sendRecvAudioOfferIsAnsweredSendRecv() async throws {
+        RTCHost.initialize()
+        let host = RTCHost()
+        let phoneFactory = RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory(), audioDevice: TapAudioDevice())
+        let config = RTCConfiguration()
+        config.sdpSemantics = .unifiedPlan
+        let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+        let delegate = NoDelegate()
+        let phone = try #require(phoneFactory.peerConnection(with: config, constraints: constraints, delegate: delegate))
+        defer { phone.close() }
+        let recvOnly = RTCRtpTransceiverInit()
+        recvOnly.direction = .recvOnly
+        phone.addTransceiver(of: .video, init: recvOnly)
+        let sendRecv = RTCRtpTransceiverInit()
+        sendRecv.direction = .sendRecv
+        phone.addTransceiver(of: .audio, init: sendRecv)
+        let offer: RTCSessionDescription = try await withCheckedThrowingContinuation { c in
+            phone.offer(for: constraints) { sdp, error in
+                if let sdp { c.resume(returning: sdp) } else { c.resume(throwing: error!) }
+            }
+        }
+        let peer = try #require(host.makePeer())
+        defer { peer.close() }
+        let answer = try await peer.answer(offer: offer.sdp)
+        let audio = try #require(answer.components(separatedBy: "m=").first { $0.hasPrefix("audio") })
+        #expect(audio.contains("a=sendrecv"))
+    }
 }

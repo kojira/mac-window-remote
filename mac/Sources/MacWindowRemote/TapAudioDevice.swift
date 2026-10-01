@@ -4,8 +4,9 @@ import WebRTC
 import WebRTCAudioDevice
 
 /// The factory's audio device (D39). It never opens a microphone or a speaker: recording is
-/// fed by `SystemAudioTap` through `deliver`, and playout does nothing, so the Mac never plays
-/// WebRTC audio. Without it WebRTC's default macOS device would open the microphone as soon as
+/// fed by `SystemAudioTap` through `deliver`, and playout is only pulled by `BlackHoleSink`
+/// while the viewing device's mic is on (D57), so the Mac never plays WebRTC audio on its
+/// speakers. Without it WebRTC's default macOS device would open the microphone as soon as
 /// an audio track is sent.
 final class TapAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     private let lock = NSLock()
@@ -51,7 +52,7 @@ final class TapAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         return true
     }
 
-    // Playout: accepted and ignored; nothing is ever played on the Mac.
+    // Playout: WebRTC only marks it started; `pullPlayout` reads it when a sink asks (D57).
     func initializePlayout() -> Bool { lock.withLock { playoutInitialized = true }; return true }
     func startPlayout() -> Bool { lock.withLock { playing = true }; return true }
     func stopPlayout() -> Bool { lock.withLock { playing = false }; return true }
@@ -71,6 +72,30 @@ final class TapAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         var flags = AudioUnitRenderActionFlags()
         var time = AudioTimeStamp()
         _ = delegate.deliverRecordedData(&flags, &time, 1, UInt32(frames), &list, nil, nil)
+    }
+
+    /// D57: fills `frames` mono 48 kHz samples with the received audio, or silence unless
+    /// WebRTC is playing. Called from the sink's IO thread.
+    func pullPlayout(_ samples: UnsafeMutablePointer<Int16>, frames: Int) {
+        let delegate: (any RTCAudioDeviceDelegate)? = lock.withLock { playing ? self.delegate : nil }
+        guard let delegate else {
+            samples.update(repeating: 0, count: frames)
+            return
+        }
+        var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+            mNumberChannels: 1, mDataByteSize: UInt32(frames * 2), mData: UnsafeMutableRawPointer(samples)))
+        var flags = AudioUnitRenderActionFlags()
+        var time = AudioTimeStamp()
+        if delegate.getPlayoutData(&flags, &time, 0, UInt32(frames), &list) != noErr {
+            samples.update(repeating: 0, count: frames)
+        }
+    }
+
+    /// D57: playout is pulled from a new thread after this (a new sink).
+    func outputThreadWillChange() {
+        let delegate = lock.withLock { self.delegate }
+        guard let delegate else { return }
+        delegate.dispatchSync { delegate.notifyAudioOutputInterrupted() }
     }
 
     /// Deliveries may come from a new thread after this (a rebuilt tap has a new IO thread).
