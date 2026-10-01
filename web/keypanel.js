@@ -1,6 +1,6 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
 // an fn layer with F1–F12, and a text key that opens the iOS keyboard. The normal layer's
-// third row is one-tap ⌘F1 and ⌘W (D37, D48), space, ⏎, and ⋯, a menu with 📋 Paste and 🖼 Image
+// third row is one-tap ⌘F1 and ⌘W (D37, D48), space, ⏎, and ⋯, a menu with 📋 Paste, 📋 Copy to Mac (D52), 🖼 Image
 // (D36), 📎 File (D42), ⬇︎ Download (D47), and ⌘Q (D41).
 
 import { mergeMods } from './modifiers.js';
@@ -24,7 +24,8 @@ const NORMAL = [
 ];
 // The ⋯ menu (D41), top to bottom. ⌘Q is here, not in the row, so a stray tap cannot quit the app.
 const MORE_MENU = [
-  { label: '📋 Paste', action: 'paste' }, { label: '🖼 Image', action: 'image' },
+  { label: '📋 Paste', action: 'paste' }, { label: '📋 Copy to Mac', action: 'copy' },
+  { label: '🖼 Image', action: 'image' },
   { label: '📎 File', action: 'file' }, { label: '⬇︎ Download', action: 'download' },
   { label: '⌘Q', key: 'q', mods: ['cmd'], combo: true },
 ];
@@ -39,7 +40,7 @@ export class KeyPanel {
   /// sendKey(name, mods): send a `key` message. modifiers: a ModifierState.
   /// textInput: the TextInput (focus/blur of the iOS keyboard field).
   /// onLayout(change): runs change(), which opens, closes, or resizes the panel, and re-fits
-  /// the stage around it. onAction('paste' | 'image' | 'file' | 'download') runs inside the tap (a user gesture),
+  /// the stage around it. onAction('paste' | 'copy' | 'image' | 'file' | 'download') runs inside the tap (a user gesture),
   /// as the clipboard read and the file picker require (D36).
   constructor({ panel, toggle, viewerEl, modifiers, textInput, sendKey, onLayout, onAction }) {
     this.panel = panel;
