@@ -111,3 +111,61 @@ private final class PasteRecordingBackend: SessionBackend, @unchecked Sendable {
         }
     }
 }
+
+/// A pasteboard in memory that records our own writes the way `SystemPasteboard` does.
+private final class FakeMacPasteboard: MacPasteboard, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 10
+    private var own: Int?
+    private var current: String? = "before connect"
+    var changeCount: Int { lock.withLock { count } }
+    var ownWriteChangeCount: Int? { lock.withLock { own } }
+    var types: [String] { ["public.utf8-plain-text"] }
+    func string() -> String? { lock.withLock { current } }
+    var text: String? { string() }
+
+    func writeOwnText(_ text: String) {
+        lock.withLock { count += 1; current = text; own = count }
+    }
+
+    /// Another app copying on the Mac.
+    func copy(_ text: String) {
+        lock.withLock { count += 1; current = text }
+    }
+}
+
+/// D52 Copy to Mac through the real server and session: the text lands on the Mac clipboard,
+/// nothing is pasted, and D51 does not send it back to the device.
+@Suite(.serialized) struct SessionCopyToMacTests {
+    static let owner = "owner@example.com"
+
+    @Test func clipboardSetWritesThePasteboardOnlyAndIsNotEchoed() async throws {
+        let backend = PasteRecordingBackend()
+        let pasteboard = FakeMacPasteboard()
+        let hub = SessionHub(owner: OwnerLogin(override: { "" }, query: { Self.owner }), backend: backend, pasteboard: pasteboard)
+        let app = Server.makeApplication(port: 0, webRoot: nil, hub: hub)
+        try await app.test(.live) { client in
+            var fields = HTTPFields()
+            fields[HTTPField.Name(TailscaleIdentity.loginHeader)!] = Self.owner
+            try await client.ws("/ws", configuration: WebSocketClientConfiguration(additionalHeaders: fields)) { inbound, outbound, _ in
+                var it = inbound.messages(maxSize: 1 << 20).makeAsyncIterator()
+                func nextText() async throws -> String? {
+                    guard case .text(let t)? = try await it.next() else { return nil }
+                    return t
+                }
+                _ = try await nextText() // hello
+                try await outbound.write(.binary(SessionUploadTests.frame(#"{"t":"clipboard.set","id":"s1"}"#, Data("行1\n行2".utf8))))
+                guard let reply = try await nextText() else { Issue.record("no reply"); return }
+                #expect(reply.contains(#""t":"result""#) && reply.contains(#""id":"s1""#))
+                #expect(pasteboard.text == "行1\n行2")
+                #expect(backend.pasted.isEmpty, "no ⌘V, no input event")
+                // A later copy on the Mac is the first clipboard.mac: our own write was skipped.
+                pasteboard.copy("copied on the Mac")
+                guard let next = try await nextText() else { Issue.record("no clipboard.mac"); return }
+                #expect(next.contains(#""t":"clipboard.mac""#) && next.contains(#""seq":1"#))
+                #expect(next.contains("copied on the Mac"))
+                try await outbound.close(.normalClosure, reason: nil)
+            }
+        }
+    }
+}

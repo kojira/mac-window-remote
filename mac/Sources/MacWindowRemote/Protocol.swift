@@ -375,6 +375,8 @@ extension ClientMessage {
 enum BinaryClientMessage: Equatable {
     /// Put `text` on the Mac clipboard and paste it into the viewed window.
     case clipboardPaste(id: String, text: String)
+    /// Put `text` on the Mac clipboard only, without pasting (D52 Copy to Mac).
+    case clipboardSet(id: String, text: String)
     /// One chunk of an image; `size` is the whole image, `offset` where `bytes` go.
     case imageChunk(id: String, size: Int, offset: Int, bytes: Data)
     /// One chunk of any file (D42); `name` is the phone's file name on the chunk at offset 0 and
@@ -411,12 +413,12 @@ enum BinaryClientMessage: Equatable {
         do { h = try JSONDecoder().decode(Header.self, from: headerData) } catch { throw ProtocolError.malformed }
         guard let id = h.id, !id.isEmpty, id.count <= 64 else { throw ProtocolError.invalidValue("id") }
         switch h.t {
-        case "clipboard.paste":
+        case "clipboard.paste", "clipboard.set":
             guard payload.count <= maxClipboardBytes else { throw UploadRejection(id: id, code: .tooLarge) }
             guard !payload.isEmpty, let text = String(data: payload, encoding: .utf8) else {
                 throw ProtocolError.invalidValue("text")
             }
-            return .clipboardPaste(id: id, text: text)
+            return h.t == "clipboard.paste" ? .clipboardPaste(id: id, text: text) : .clipboardSet(id: id, text: text)
         case "image.chunk", "file.chunk":
             guard let size = h.size, size > 0 else { throw ProtocolError.invalidValue("size") }
             guard let offset = h.offset, offset >= 0 else { throw ProtocolError.invalidValue("offset") }

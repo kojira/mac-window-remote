@@ -81,14 +81,15 @@ actor SessionHub {
     let backend: any SessionBackend
     let owner: OwnerLogin
     let uploads: UploadStore
-    /// The Mac pasteboard whose new text goes to the device (D51); nil sends nothing.
-    let pasteboard: (any PasteboardReading)?
+    /// The Mac pasteboard whose new text goes to the device (D51) and that Copy to Mac writes
+    /// (D52); nil sends nothing and fails Copy to Mac.
+    let pasteboard: (any MacPasteboard)?
     /// One-time download tokens (D47), shared by the session that issues them and the HTTP route.
     private var downloads = DownloadTokenStore()
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
     init(owner: OwnerLogin, backend: any SessionBackend, uploads: UploadStore = .standard,
-         pasteboard: (any PasteboardReading)? = nil,
+         pasteboard: (any MacPasteboard)? = nil,
          onStatus: @escaping @Sendable (ConnectionStatus) -> Void = { _ in }) {
         self.owner = owner
         self.backend = backend
@@ -190,7 +191,7 @@ actor Session {
     private var pingTask: Task<Void, Never>?
     /// Polls the Mac pasteboard while this session is connected (D51).
     private var clipboardTask: Task<Void, Never>?
-    private let pasteboard: (any PasteboardReading)?
+    private let pasteboard: (any MacPasteboard)?
     private var thumbsTask: Task<Void, Never>?
     /// The pending `app.open` (D40); a newer one, a view change, or teardown cancels it.
     private var appOpenTask: Task<Void, Never>?
@@ -223,7 +224,7 @@ actor Session {
     static let pingInterval: Duration = .seconds(10)
 
     init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter, uploads: UploadStore,
-         pasteboard: (any PasteboardReading)? = nil) {
+         pasteboard: (any MacPasteboard)? = nil) {
         self.hub = hub
         self.backend = backend
         self.outbound = outbound
@@ -616,6 +617,9 @@ actor Session {
         case .clipboardPaste(let id, let text):
             log.info("clipboard paste received bytes=\(text.utf8.count, privacy: .public)")
             await pasteIntoViewedWindow(text, id: id, path: nil)
+        case .clipboardSet(let id, let text):
+            log.info("clipboard set received bytes=\(text.utf8.count, privacy: .public)")
+            await setMacClipboard(text, id: id)
         case .imageChunk(let id, let size, let offset, let bytes):
             await uploadChunk(id: id, size: size, offset: offset, bytes: bytes, fileName: nil)
         case .fileChunk(let id, let size, let offset, let bytes, let name):
@@ -669,6 +673,17 @@ actor Session {
                 await self?.send(.result(id: id, path: path))
             }
         }
+    }
+
+    /// D52 Copy to Mac: the text goes on the Mac clipboard only (no ⌘V, no raise, no input
+    /// event), recorded as our own change so D51 does not send it back.
+    private func setMacClipboard(_ text: String, id: String) async {
+        guard let pasteboard else {
+            await sendUploadError(.internal, id: id)
+            return
+        }
+        await MainActor.run { pasteboard.writeOwnText(text) }
+        await send(.result(id: id, path: nil))
     }
 
     private func sendUploadError(_ code: ErrorCode, id: String) async {
