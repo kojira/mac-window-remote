@@ -58,6 +58,10 @@ enum ErrorCode: String, Codable {
 enum ClientMessage: Equatable {
     case windowsList
     case viewStart(windowId: UInt32)
+    /// The Displays tab list (D56).
+    case displaysList
+    /// View a whole display (D56): `view.start` with `displayId` instead of `windowId`.
+    case viewStartDisplay(displayId: UInt32)
     case viewStop
     /// Thumbnails of the quick-switch slot windows, at most `maxThumbnailRequest` (D33).
     case thumbsRequest(windowIds: [UInt32])
@@ -135,6 +139,7 @@ extension ClientMessage {
     private struct Envelope: Decodable {
         let t: String
         let windowId: UInt32?
+        let displayId: UInt32?
         let windowIds: [UInt32]?
         let pc: Int?
         let sdp: String?
@@ -216,7 +221,10 @@ extension ClientMessage {
         case "windows.list":
             return .windowsList
         case "view.start":
+            if let displayId = e.displayId, e.windowId == nil { return .viewStartDisplay(displayId: displayId) }
             return .viewStart(windowId: try require(e.windowId, "windowId"))
+        case "displays.list":
+            return .displaysList
         case "view.stop":
             return .viewStop
         case "thumbs.request":
@@ -336,7 +344,7 @@ extension ClientMessage {
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
+        case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
              .filesList, .filesSearch, .downloadRequest:
             return .socket
         case .move, .scroll, .point: return .motion
@@ -347,7 +355,8 @@ extension ClientMessage {
     var typeName: String {
         switch self {
         case .windowsList: return "windows.list"
-        case .viewStart: return "view.start"
+        case .viewStart, .viewStartDisplay: return "view.start"
+        case .displaysList: return "displays.list"
         case .viewStop: return "view.stop"
         case .thumbsRequest: return "thumbs.request"
         case .rtcOffer: return "rtc.offer"
@@ -462,6 +471,16 @@ struct WindowItem: Codable, Equatable {
     var h: Double
 }
 
+/// One connected display for the Displays tab (D56). `w` and `h` are points; `jpeg` is a
+/// small screenshot, nil when it could not be taken.
+struct DisplayItem: Equatable, Sendable {
+    var id: UInt32
+    var name: String
+    var w: Double
+    var h: Double
+    var jpeg: Data?
+}
+
 enum ViewState: String, Codable {
     case starting, streaming
     case windowGone = "window_gone"
@@ -473,6 +492,10 @@ enum ServerMessage {
     case hello(permissions: PermissionsStatus)
     case windows([WindowItem])
     case viewState(windowId: UInt32, state: ViewState, reason: String?)
+    /// The Displays tab list (D56).
+    case displays([DisplayItem])
+    /// `view.state` for a viewed display (D56); `window_gone` means the display was removed.
+    case displayViewState(displayId: UInt32, state: ViewState, reason: String?)
     case error(code: ErrorCode, message: String, id: String? = nil)
     case ping
     /// Server-confirmed cursor position (D24); `seq` is the highest applied `move.seq`.
@@ -509,6 +532,13 @@ enum ServerMessage {
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
     private struct View: Encodable {
         let t = "view.state"; let windowId: UInt32; let state: ViewState; let reason: String?
+    }
+    private struct Displays: Encodable {
+        struct Item: Encodable { let id: UInt32; let name: String; let w: Double; let h: Double; let jpeg: String? }
+        let t = "displays"; let items: [Item]
+    }
+    private struct DisplayView: Encodable {
+        let t = "view.state"; let displayId: UInt32; let state: ViewState; let reason: String?
     }
     private struct Failure: Encodable { let t = "error"; let id: String?; let code: ErrorCode; let message: String }
     private struct Ping: Encodable { let t = "ping" }
@@ -566,6 +596,12 @@ enum ServerMessage {
         case .windows(let items): data = try? encoder.encode(Windows(items: items))
         case .viewState(let id, let state, let reason):
             data = try? encoder.encode(View(windowId: id, state: state, reason: reason))
+        case .displays(let items):
+            data = try? encoder.encode(Displays(items: items.map {
+                Displays.Item(id: $0.id, name: $0.name, w: $0.w, h: $0.h, jpeg: $0.jpeg?.base64EncodedString())
+            }))
+        case .displayViewState(let id, let state, let reason):
+            data = try? encoder.encode(DisplayView(displayId: id, state: state, reason: reason))
         case .error(let code, let message, let id):
             data = try? encoder.encode(Failure(id: id, code: code, message: message))
         case .ping: data = try? encoder.encode(Ping())

@@ -39,7 +39,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     @Test func clicksAfterMovesAreAllPosted() async throws {
         let backend = RecordingBackend()
         let pipeline = InputPipeline(backend: backend, onError: { _ in }, onCursor: { _, _ in })
-        await pipeline.setTarget(1)
+        await pipeline.setTarget(.window(1))
         for round in 0..<20 {
             await pipeline.submitMove(seq: round * 2 + 1, dx: 0.01, dy: 0)
             await pipeline.submit(.click)
@@ -58,7 +58,7 @@ private final class RecordingBackend: SessionBackend, @unchecked Sendable {
     @Test func desktopMouseUsesAbsolutePositions() async throws {
         let backend = RecordingBackend()
         let pipeline = InputPipeline(backend: backend, onError: { _ in }, onCursor: { _, _ in })
-        await pipeline.setTarget(1)
+        await pipeline.setTarget(.window(1))
         await pipeline.submitPoint(seq: 5, u: 0.2, v: 0.3)
         await pipeline.submitPoint(seq: 4, u: 0.9, v: 0.9)
         await pipeline.submitMouse(.left, down: true, clicks: 2, seq: 6, u: 0.25, v: 0.35)

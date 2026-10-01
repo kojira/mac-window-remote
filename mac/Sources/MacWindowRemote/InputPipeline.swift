@@ -21,7 +21,8 @@ struct InputAction: Sendable {
         /// Press the app's menu item at `path` if the titles along it still match (D43).
         case menuPress(path: [Int], titles: [String])
     }
-    let windowId: UInt32
+    /// The viewed window or display (D56).
+    let target: ViewTarget
     let cursor: CursorState
     let kind: Kind
     /// When the message arrived, to log queueing plus posting latency.
@@ -52,7 +53,7 @@ actor InputPipeline {
     private let onError: @Sendable (ErrorCode) async -> Void
     private let onCursor: @Sendable (CursorState, Int) async -> Void
 
-    private var target: UInt32?
+    private var target: ViewTarget?
     private var cursor = CursorState()
     private var appliedSeq = 0
 
@@ -81,10 +82,18 @@ actor InputPipeline {
         self.onCursor = onCursor
     }
 
-    /// Viewing started (`windowId`) or stopped (nil). Releases a held button (D26). A new
-    /// window puts the cursor at its center and brings it to the front once (D25).
-    func setTarget(_ windowId: UInt32?) async {
-        if windowId != target {
+    /// How often display mode reads the Mac pointer, so the overlay follows a mouse moved at
+    /// the Mac (D56).
+    static let pointerPollInterval: Duration = .milliseconds(250)
+    private var pointerTask: Task<Void, Never>?
+
+    /// Viewing started (a window or display) or stopped (nil). Releases a held button (D26). A
+    /// new window puts the cursor at its center and brings it to the front once (D25). A display
+    /// is never raised or activated; the cursor starts where the Mac pointer is (D56).
+    func setTarget(_ newTarget: ViewTarget?) async {
+        if newTarget != target {
+            pointerTask?.cancel()
+            pointerTask = nil
             for action in discrete { if let reply = action.reply { Task { await reply(.windowNotFound) } } }
             discrete.removeAll()
             pendingScroll = nil
@@ -92,10 +101,41 @@ actor InputPipeline {
             await backend.releaseButton()
             cursor = CursorState()
         }
-        target = windowId
-        guard let windowId, !closed else { return }
-        await backend.focus(windowId: windowId)
+        let changed = newTarget != target
+        target = newTarget
+        guard let newTarget, !closed else { return }
+        switch newTarget {
+        case .window(let windowId):
+            await backend.focus(windowId: windowId)
+        case .display(let displayId):
+            if changed, let c = await backend.displayCursor(displayId: displayId), target == newTarget { cursor = c }
+            if pointerTask == nil { startPointerPoll(displayId) }
+        }
         await onCursor(cursor, appliedSeq)
+    }
+
+    /// D56: while idle, a pointer moved at the Mac (or onto another display, clamped to this
+    /// one's edge) moves the overlay. Pending or in-flight input wins over the reading.
+    private func startPointerPoll(_ displayId: UInt32) {
+        pointerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.pointerPollInterval)
+                guard !Task.isCancelled, let self else { return }
+                await self.adoptMacPointer(displayId)
+            }
+        }
+    }
+
+    private func adoptMacPointer(_ displayId: UInt32) async {
+        guard isIdle(on: displayId), let c = await backend.displayCursor(displayId: displayId),
+              isIdle(on: displayId), abs(c.u - cursor.u) > 0.002 || abs(c.v - cursor.v) > 0.002 else { return }
+        cursor = c
+        await onCursor(cursor, appliedSeq)
+    }
+
+    private func isIdle(on displayId: UInt32) -> Bool {
+        target == .display(displayId) && !closed && !motionDirty && pendingScroll == nil && motionPost == nil
+            && motionTask == nil && discrete.isEmpty && discreteTask == nil
     }
 
     func submitMove(seq: Int, dx: Double, dy: Double) {
@@ -152,7 +192,7 @@ actor InputPipeline {
         case .paste(let text): kind = .paste(text)
         case .menuPress(let path, let titles): kind = .menuPress(path: path, titles: titles)
         }
-        discrete.append(InputAction(windowId: target, cursor: cursor, kind: kind, reply: reply))
+        discrete.append(InputAction(target: target, cursor: cursor, kind: kind, reply: reply))
         guard discreteTask == nil else { return }
         discreteTask = Task { await self.runDiscrete() }
     }
@@ -197,10 +237,10 @@ actor InputPipeline {
         let onError = onError
         let post = Task {
             if moved {
-                _ = await backend.perform(InputAction(windowId: target, cursor: at, kind: .move))
+                _ = await backend.perform(InputAction(target: target, cursor: at, kind: .move))
             }
             if let scroll, let code = await backend.perform(
-                InputAction(windowId: target, cursor: at, kind: .scroll(du: scroll.du, dv: scroll.dv))) {
+                InputAction(target: target, cursor: at, kind: .scroll(du: scroll.du, dv: scroll.dv))) {
                 await onError(code)
             }
         }

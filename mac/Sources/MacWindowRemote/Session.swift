@@ -45,6 +45,27 @@ protocol SessionBackend: Sendable {
     func openApp(id: String) async -> AppOpenOutcome
     /// The menu bar of the viewed window's app (D43); pressing goes through `perform`.
     func listMenu(windowId: UInt32) async -> MenuListOutcome
+    /// The connected displays with a thumbnail each (D56).
+    func listDisplays() async throws -> [DisplayItem]
+    /// Starts capturing a whole display (D56).
+    func startDisplayCapture(displayId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> DisplayCaptureStart
+    /// The Mac pointer as a cursor on the display, clamped to it; nil if the display is gone (D56).
+    func displayCursor(displayId: UInt32) async -> CursorState?
+    /// Called when a display view starts or stops (display assertion, menu bar state, D56).
+    func viewingDisplayChanged(_ display: DisplayItem?)
+    /// Turns a sleeping display on when viewing starts (`IOPMAssertionDeclareUserActivity`, #49).
+    func declareUserActivity()
+}
+
+/// Backends without displays: the test fakes of window-mode features.
+extension SessionBackend {
+    func listDisplays() async throws -> [DisplayItem] { [] }
+    func startDisplayCapture(displayId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> DisplayCaptureStart {
+        .displayGone
+    }
+    func displayCursor(displayId: UInt32) async -> CursorState? { nil }
+    func viewingDisplayChanged(_ display: DisplayItem?) {}
+    func declareUserActivity() {}
 }
 
 /// What `openApp` found (D40).
@@ -61,6 +82,13 @@ enum CaptureEvent: Sendable {
 enum CaptureStart {
     case started(any CaptureHandle, WindowItem)
     case windowGone
+    case unavailable(reason: String)
+}
+
+/// D56: `startDisplayCapture`'s result; `displayGone` means the display is not connected.
+enum DisplayCaptureStart {
+    case started(any CaptureHandle, DisplayItem)
+    case displayGone
     case unavailable(reason: String)
 }
 
@@ -186,7 +214,11 @@ actor Session {
     }
     /// The viewed window's app, once its capture started; App audio taps it (D39).
     private var viewedPid: pid_t? { didSet { applyAudio() } }
+    /// The viewed display (D56); nil while a window or nothing is viewed.
+    private var viewingDisplayId: UInt32? { didSet { applyAudio() } }
     private var capture: (any CaptureHandle)?
+    /// `capture` is of a display (D56), so stopping it reports `viewingDisplayChanged`.
+    private var captureIsDisplay = false
     private var retryTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
     /// Polls the Mac pasteboard while this session is connected (D51).
@@ -325,13 +357,30 @@ actor Session {
         case .viewStart(let windowId):
             appOpenTask?.cancel()
             await startViewing(windowId)
+        case .displaysList:
+            guard backend.permissions().screenRecording else {
+                await send(.error(code: .permissionScreenRecording,
+                                  message: "Screen Recording permission is missing on the Mac."))
+                return
+            }
+            do {
+                await send(.displays(try await backend.listDisplays()))
+            } catch {
+                log.error("display list failed: \(String(describing: error), privacy: .public)")
+                await send(.error(code: .internal, message: "Could not list displays"))
+            }
+        case .viewStartDisplay(let displayId):
+            appOpenTask?.cancel()
+            await startViewingDisplay(displayId)
         case .thumbsRequest(let windowIds):
             sendThumbnails(windowIds)
         case .viewStop:
             appOpenTask?.cancel()
             stopViewing()
             if let id = viewingWindowId { await send(.viewState(windowId: id, state: .stopped, reason: nil)) }
+            if let id = viewingDisplayId { await send(.displayViewState(displayId: id, state: .stopped, reason: nil)) }
             viewingWindowId = nil
+            viewingDisplayId = nil
             await input.setTarget(nil)
         case .rtcOffer(let pc, let sdp):
             await answer(pc: pc, sdp: sdp)
@@ -561,7 +610,9 @@ actor Session {
     /// Runs the tap only while audio is on, the peer connection is connected, and (App mode) a
     /// window is viewed; anything else stops it, so the Mac is audible again.
     private func applyAudio() {
-        let target = closed ? nil : AudioTarget.desired(mode: audioMode, peerConnected: peerConnected, viewedPid: viewedPid)
+        // D56: a display has no app, so App plays the whole Mac while a display is viewed.
+        let mode = audioMode == .app && viewingDisplayId != nil ? .all : audioMode
+        let target = closed ? nil : AudioTarget.desired(mode: mode, peerConnected: peerConnected, viewedPid: viewedPid)
         guard target != audioApplied else { return }
         audioApplied = target
         let ok = backend.setAudio(target) { [weak self] event in
@@ -629,7 +680,7 @@ actor Session {
 
     /// An image (D36) or file (D42) chunk; `fileName` is nil for an image.
     private func uploadChunk(id: String, size: Int, offset: Int, bytes: Data, fileName: String?) async {
-        if offset == 0, viewingWindowId == nil {
+        if offset == 0, viewingWindowId == nil, viewingDisplayId == nil {
             images.reject(id: id)
             await sendUploadError(.windowNotFound, id: id)
             return
@@ -753,6 +804,7 @@ actor Session {
             }
             peer = created
             peerNumber = pc
+            created.setViewingDisplay(captureIsDisplay)
             peerTask = Task { [weak self] in
                 for await event in created.events {
                     await self?.peerEvent(event, pc: pc)
@@ -786,6 +838,7 @@ actor Session {
                 closePeer()
                 stopViewing()
                 viewingWindowId = nil
+                viewingDisplayId = nil
                 await input.setTarget(nil)
             }
         case .message(let channel, let data):
@@ -809,11 +862,14 @@ actor Session {
         // window change releases a held button (D26).
         stopViewing()
         if viewingWindowId != windowId { await input.setTarget(nil) }
+        viewingDisplayId = nil
         viewingWindowId = windowId
         guard backend.permissions().screenRecording else {
             await send(.viewState(windowId: windowId, state: .captureUnavailable, reason: "permission_screen_recording"))
             return
         }
+        // #49: a sleeping display turns on, so the capture can start.
+        backend.declareUserActivity()
         await send(.viewState(windowId: windowId, state: .starting, reason: nil))
         let result = await backend.startCapture(windowId: windowId) { [weak self] event in
             Task { await self?.captureEvent(event, windowId: windowId) }
@@ -827,7 +883,8 @@ actor Session {
             capture = handle
             viewedPid = window.pid
             backend.viewingChanged(window)
-            await input.setTarget(windowId)
+            peer?.setViewingDisplay(false)
+            await input.setTarget(.window(windowId))
             await hub?.statusChanged(self, .viewing(app: window.app, title: window.title))
             await send(.viewState(windowId: windowId, state: .streaming, reason: nil))
         case .windowGone:
@@ -838,6 +895,73 @@ actor Session {
             await send(.viewState(windowId: windowId, state: .captureUnavailable, reason: reason))
             scheduleRetry(windowId)
         }
+    }
+
+    /// D56: like `startViewing`, for a whole display. Input goes to the point without any raise.
+    private func startViewingDisplay(_ displayId: UInt32) async {
+        stopViewing()
+        if viewingDisplayId != displayId { await input.setTarget(nil) }
+        viewingWindowId = nil
+        viewingDisplayId = displayId
+        guard backend.permissions().screenRecording else {
+            await send(.displayViewState(displayId: displayId, state: .captureUnavailable, reason: "permission_screen_recording"))
+            return
+        }
+        backend.declareUserActivity()
+        await send(.displayViewState(displayId: displayId, state: .starting, reason: nil))
+        let result = await backend.startDisplayCapture(displayId: displayId) { [weak self] event in
+            Task { await self?.displayCaptureEvent(event, displayId: displayId) }
+        }
+        guard viewingDisplayId == displayId, !closed else {
+            if case .started(let handle, _) = result { handle.stop() }
+            return
+        }
+        switch result {
+        case .started(let handle, let display):
+            capture = handle
+            captureIsDisplay = true
+            backend.viewingDisplayChanged(display)
+            peer?.setViewingDisplay(true)
+            await input.setTarget(.display(displayId))
+            await hub?.statusChanged(self, .viewing(app: "Display", title: display.name))
+            await send(.displayViewState(displayId: displayId, state: .streaming, reason: nil))
+        case .displayGone:
+            viewingDisplayId = nil
+            await input.setTarget(nil)
+            await send(.displayViewState(displayId: displayId, state: .windowGone, reason: nil))
+        case .unavailable(let reason):
+            await send(.displayViewState(displayId: displayId, state: .captureUnavailable, reason: reason))
+            scheduleDisplayRetry(displayId)
+        }
+    }
+
+    private func displayCaptureEvent(_ event: CaptureEvent, displayId: UInt32) async {
+        guard viewingDisplayId == displayId, !closed else { return }
+        switch event {
+        case .windowGone:
+            stopViewing()
+            viewingDisplayId = nil
+            await input.setTarget(nil)
+            await send(.displayViewState(displayId: displayId, state: .windowGone, reason: nil))
+        case .streamStopped:
+            stopViewing()
+            await send(.displayViewState(displayId: displayId, state: .captureUnavailable, reason: "stream_stopped"))
+            scheduleDisplayRetry(displayId)
+        }
+    }
+
+    private func scheduleDisplayRetry(_ displayId: UInt32) {
+        retryTask?.cancel()
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(for: Session.captureRetryInterval)
+            guard !Task.isCancelled else { return }
+            await self?.retryDisplay(displayId)
+        }
+    }
+
+    private func retryDisplay(_ displayId: UInt32) async {
+        guard viewingDisplayId == displayId, capture == nil, !closed else { return }
+        await startViewingDisplay(displayId)
     }
 
     private func captureEvent(_ event: CaptureEvent, windowId: UInt32) async {
@@ -876,7 +1000,8 @@ actor Session {
         if let capture {
             capture.stop()
             self.capture = nil
-            backend.viewingChanged(nil)
+            if captureIsDisplay { backend.viewingDisplayChanged(nil) } else { backend.viewingChanged(nil) }
+            captureIsDisplay = false
             Task { await hub?.statusChanged(self, .connected) }
         }
     }
@@ -905,6 +1030,7 @@ actor Session {
         closed = true
         stopViewing()
         viewingWindowId = nil
+        viewingDisplayId = nil
         pingTask?.cancel()
         clipboardTask?.cancel()
         thumbsTask?.cancel()

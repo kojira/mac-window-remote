@@ -110,6 +110,9 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
     private var control: RTCDataChannel?
     private var motion: RTCDataChannel?
     private var statsTimer: DispatchSourceTimer?
+    /// A display is viewed (D56): the video bitrate floor is higher.
+    private var viewingDisplay = false
+    private var videoSender: RTCRtpSender?
     private var lastBytesSent: (bytes: Double, time: TimeInterval)?
 
     fileprivate init(host: RTCHost) {
@@ -143,12 +146,31 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
         }
         let answer = try await createAnswer()
         try await setLocal(answer)
+        lock.withLock { videoSender = transceiver.sender }
         applySenderParameters(transceiver.sender)
         return answer.sdp
     }
 
+    /// The video bitrate floor (D50). A whole display's text is smaller, so display mode keeps
+    /// a higher floor (D56).
+    static func minBitrateBps(viewingDisplay: Bool) -> Int {
+        viewingDisplay ? 3_000_000 : 1_500_000
+    }
+
+    /// D56: switches the bitrate floor between window and display mode on the live sender,
+    /// without renegotiation.
+    func setViewingDisplay(_ on: Bool) {
+        let sender: RTCRtpSender? = lock.withLock {
+            guard viewingDisplay != on else { return nil }
+            viewingDisplay = on
+            return videoSender
+        }
+        if let sender { applySenderParameters(sender) }
+    }
+
     /// D21: keep resolution (text stays sharp) and cap bitrate and frame rate.
     private func applySenderParameters(_ sender: RTCRtpSender) {
+        let floor = Self.minBitrateBps(viewingDisplay: lock.withLock { viewingDisplay })
         let parameters = sender.parameters
         parameters.degradationPreference = NSNumber(value: RTCDegradationPreference.maintainResolution.rawValue)
         for encoding in parameters.encodings {
@@ -156,7 +178,7 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
             // A still window sends few frames, and WebRTC starts from a low bandwidth estimate,
             // so the first frames stay blurry and are never refined; a floor keeps text readable
             // on a large desktop screen (D50).
-            encoding.minBitrateBps = 1_500_000
+            encoding.minBitrateBps = NSNumber(value: floor)
             encoding.maxFramerate = 30
         }
         sender.parameters = parameters
