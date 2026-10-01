@@ -14,9 +14,14 @@ import Testing
         #expect(try decode(#"{"t":"key","key":"Backspace"}"#) == .key(name: "Backspace", mods: []))
     }
 
-    /// D47: file listing, search, and download requests go over the socket.
+    /// D47: file listing, search, and download requests go over the socket; D55: the list's sort.
     @Test func decodesFileMessages() throws {
-        #expect(try decode(#"{"t":"files.list","id":"r1","path":"~"}"#) == .filesList(id: "r1", path: "~", hidden: false))
+        #expect(try decode(#"{"t":"files.list","id":"r1","path":"~"}"#) == .filesList(id: "r1", path: "~", hidden: false, sort: .name))
+        #expect(try decode(#"{"t":"files.list","id":"r1","path":"/","sort":"mtime","desc":true}"#)
+                == .filesList(id: "r1", path: "/", hidden: false, sort: FileSort(key: .mtime, descending: true)))
+        #expect(try decode(#"{"t":"files.list","id":"r1","path":"/","sort":"size"}"#)
+                == .filesList(id: "r1", path: "/", hidden: false, sort: FileSort(key: .size, descending: false)))
+        #expect(throws: ProtocolError.invalidValue("sort")) { try decode(#"{"t":"files.list","id":"r","path":"/","sort":"kind"}"#) }
         #expect(try decode(#"{"t":"files.search","id":"r2","base":"/","q":"rep","hidden":true}"#)
                 == .filesSearch(id: "r2", base: "/", query: "rep", hidden: true))
         #expect(try decode(#"{"t":"download.request","id":"r3","paths":["/a","/b c"]}"#)

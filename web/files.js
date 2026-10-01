@@ -58,6 +58,51 @@ export function decodeFound(msg) {
   };
 }
 
+/// The list order (D55): `key` is 'name', 'mtime', or 'size'; `desc` reverses it.
+export const SORT_STORAGE_KEY = 'mwr.fileSort';
+export const DEFAULT_SORT = Object.freeze({ key: 'mtime', desc: true });
+/// The direction a key starts in when chosen: A→Z, newest first, largest first.
+export const SORT_DEFAULT_DESC = Object.freeze({ name: false, mtime: true, size: true });
+const SORT_LABELS = { name: 'Name', mtime: 'Modified', size: 'Size' };
+
+/// A stored sort ('{"key":"size","desc":false}'); DEFAULT_SORT if missing or malformed.
+export function parseSort(raw) {
+  try {
+    const v = JSON.parse(raw);
+    if (v && Object.hasOwn(SORT_DEFAULT_DESC, v.key) && typeof v.desc === 'boolean') return { key: v.key, desc: v.desc };
+  } catch { /* fall through */ }
+  return { ...DEFAULT_SORT };
+}
+
+/// Tapping the active key reverses it; another key starts in its default direction.
+export function nextSort(sort, key) {
+  return sort.key === key ? { key, desc: !sort.desc } : { key, desc: SORT_DEFAULT_DESC[key] };
+}
+
+/// Localized, case-insensitive, like the Mac's name order (D47).
+function compareNames(a, b) {
+  const order = a.name.localeCompare(b.name, undefined, { sensitivity: 'accent' });
+  if (order !== 0) return order;
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+/// Folders first; then `sort` (folders by name under size); a missing size or date goes last
+/// in both directions; ties by name.
+export function compareEntries(sort) {
+  const sign = sort.desc ? -1 : 1;
+  return (a, b) => {
+    if (a.dir !== b.dir) return a.dir ? -1 : 1;
+    if (sort.key === 'name') return sign * compareNames(a, b);
+    if (sort.key === 'size' && a.dir) return compareNames(a, b);
+    const x = a[sort.key];
+    const y = b[sort.key];
+    if (x == null || y == null) return x == null && y == null ? compareNames(a, b) : x == null ? 1 : -1;
+    return x === y ? compareNames(a, b) : sign * (x - y);
+  };
+}
+
+export const sortEntries = (entries, sort) => [...entries].sort(compareEntries(sort));
+
 /// "/a/b" → "/a"; "/a" → "/"; "/" → null.
 export function parentPath(path) {
   if (path === '/' || !path.startsWith('/')) return null;
@@ -110,11 +155,14 @@ function button(className, text, onClick, label) {
 
 export class FileSheet {
   /// root: the backdrop element (hidden when closed). send(msg): a socket message, false if not
-  /// connected. download(url, name): start the browser download.
-  constructor({ root, send, download }) {
+  /// connected. download(url, name): start the browser download. storage: where the sort is
+  /// remembered (localStorage).
+  constructor({ root, send, download, storage = globalThis.localStorage }) {
     this.root = root;
     this.send = send;
     this.download = download;
+    this.storage = storage;
+    this.sort = parseSort(storage?.getItem(SORT_STORAGE_KEY));
     this.counter = 0;
     this.path = '';
     this.listing = null;   // decoded `files` of `path`
@@ -135,6 +183,14 @@ export class FileSheet {
     header.append(this.up, this.crumbs, button('menu-close', '✕', () => this.close(), 'Close'));
 
     this.placesBar = el('div', 'files-places');
+
+    this.sortBar = el('div', 'files-sort');
+    this.sortButtons = {};
+    this.sortBar.append(el('span', 'files-sort-label', 'Sort:'));
+    for (const key of Object.keys(SORT_LABELS)) {
+      this.sortButtons[key] = button('files-sort-key', SORT_LABELS[key], () => this.setSort(key));
+      this.sortBar.append(this.sortButtons[key]);
+    }
 
     const searchRow = el('div', 'files-search');
     this.query = el('input', 'files-query');
@@ -164,7 +220,7 @@ export class FileSheet {
     this.downloadButton = button('files-download primary', 'Download', () => this.requestDownload());
     this.bar.append(this.summary, this.downloadButton);
 
-    panel.append(header, this.placesBar, searchRow, baseRow, this.list, this.bar);
+    panel.append(header, this.placesBar, this.sortBar, searchRow, baseRow, this.list, this.bar);
     root.append(panel);
     this.panel = panel;
     root.addEventListener('click', (e) => { if (e.target === root) this.close(); });
@@ -200,7 +256,7 @@ export class FileSheet {
     if (path.startsWith('/')) this.path = path;
     this.listing = null;
     this.message = 'Loading…';
-    if (!this.send({ t: 'files.list', id: this.listId, path, hidden: this.showHidden })) {
+    if (!this.send({ t: 'files.list', id: this.listId, path, hidden: this.showHidden, sort: this.sort.key, desc: this.sort.desc })) {
       this.listId = null;
       this.message = 'Not connected to the Mac';
     }
@@ -210,6 +266,15 @@ export class FileSheet {
   goUp() {
     const up = parentPath(this.path);
     if (up) this.navigate(up);
+  }
+
+  /// Re-sorts the rows received; a capped listing is asked for again, so the Mac picks the
+  /// first rows of the new order.
+  setSort(key) {
+    this.sort = nextSort(this.sort, key);
+    try { this.storage?.setItem(SORT_STORAGE_KEY, JSON.stringify(this.sort)); } catch { /* private mode */ }
+    if (!this.found && this.listing?.truncated) this.navigate(this.listing.path);
+    else this.render();
   }
 
   toggleHidden() {
@@ -321,6 +386,12 @@ export class FileSheet {
       const b = button(p.path === this.path ? 'files-place active' : 'files-place', p.name, () => this.navigate(p.path));
       this.placesBar.append(b);
     }
+    for (const [key, b] of Object.entries(this.sortButtons)) {
+      const active = key === this.sort.key;
+      b.className = active ? 'files-sort-key active' : 'files-sort-key';
+      b.textContent = active ? `${SORT_LABELS[key]} ${this.sort.desc ? '↓' : '↑'}` : SORT_LABELS[key];
+      b.setAttribute('aria-pressed', String(active));
+    }
     this.hiddenToggle.className = this.showHidden ? 'files-hidden active' : 'files-hidden';
     this.hiddenToggle.setAttribute('aria-pressed', String(this.showHidden));
     this.list.textContent = '';
@@ -333,7 +404,7 @@ export class FileSheet {
   renderListing() {
     if (!this.listing) { this.note(this.message); return; }
     if (this.listing.entries.length === 0) this.note('Empty folder');
-    for (const e of this.listing.entries) this.list.append(this.row(e, false));
+    for (const e of sortEntries(this.listing.entries, this.sort)) this.list.append(this.row(e, false));
     if (this.listing.truncated) {
       this.note(`Showing the first ${this.listing.entries.length.toLocaleString('en-US')} of `
         + `${this.listing.total.toLocaleString('en-US')} items. Use Search to find the rest.`);
@@ -345,7 +416,7 @@ export class FileSheet {
     if (f.pending) { this.note(`Searching in ${f.base}…`); return; }
     if (f.error) { this.note(f.error); return; }
     this.note(f.entries.length === 0 ? `No names match in ${f.base}` : `${f.entries.length} found in ${f.base}`);
-    for (const e of f.entries) this.list.append(this.row(e, true));
+    for (const e of sortEntries(f.entries, this.sort)) this.list.append(this.row(e, true));
     if (f.truncated) this.note('Stopped at 500 matches. Type more of the name.');
     else if (f.timedOut) this.note('Stopped after 5 seconds. Search in a smaller folder.');
   }

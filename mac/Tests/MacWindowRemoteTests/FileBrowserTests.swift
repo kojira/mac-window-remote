@@ -77,6 +77,42 @@ import Testing
         #expect(listing.entries.last?.name == "f09")
     }
 
+    /// D55: the requested order is applied before the cap, so "newest first" in a folder
+    /// over the cap sends the newest files.
+    @Test func sortsBeforeTheCap() throws {
+        let t = try Tree()
+        for i in 0..<12 {
+            let name = String(format: "f%02d", i)
+            try t.file(name, String(repeating: "x", count: 12 - i))
+            // f00 is the oldest; f11 the newest.
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_000_000 + Double(i) * 60)],
+                                                  ofItemAtPath: t.root + "/" + name)
+        }
+        try t.dir("old-dir")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: t.root + "/old-dir")
+        let newest = try FileBrowser.list(path: t.root, home: "/h", showHidden: false,
+                                          sort: FileSort(key: .mtime, descending: true), limit: 4)
+        #expect(newest.entries.map(\.name) == ["old-dir", "f11", "f10", "f09"])
+        #expect(newest.total == 13 && newest.truncated)
+        let largest = try FileBrowser.list(path: t.root, home: "/h", showHidden: false,
+                                           sort: FileSort(key: .size, descending: true), limit: 3)
+        #expect(largest.entries.map(\.name) == ["old-dir", "f00", "f01"])
+        let zToA = try FileBrowser.list(path: t.root, home: "/h", showHidden: false,
+                                        sort: FileSort(key: .name, descending: true), limit: 3)
+        #expect(zToA.entries.map(\.name) == ["old-dir", "f11", "f10"])
+    }
+
+    /// D55: equal values fall back to the name order; a missing size or date goes last.
+    @Test func sortTiesAndMissingValues() {
+        func e(_ name: String, size: Int64?, mtime: Double?) -> FileEntry {
+            FileEntry(name: name, path: "/" + name, dir: false, size: size, mtime: mtime, link: false, parent: nil)
+        }
+        let rows = [e("b", size: 5, mtime: 10), e("A", size: 5, mtime: 10), e("none", size: nil, mtime: nil), e("c", size: 9, mtime: 20)]
+        #expect(FileBrowser.sorted(rows, by: FileSort(key: .size, descending: true)).map(\.name) == ["c", "A", "b", "none"])
+        #expect(FileBrowser.sorted(rows, by: FileSort(key: .size, descending: false)).map(\.name) == ["A", "b", "c", "none"])
+        #expect(FileBrowser.sorted(rows, by: FileSort(key: .mtime, descending: false)).map(\.name) == ["A", "b", "c", "none"])
+    }
+
     @Test func followsSymlinksAndReportsErrors() throws {
         let t = try Tree()
         try t.file("real/inside.txt")
