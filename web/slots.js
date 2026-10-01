@@ -6,6 +6,11 @@ export const SLOTS_KEY = 'mwr.slots';
 
 const isSlot = (s) => !!s && Number.isInteger(s.windowId) && typeof s.app === 'string' && typeof s.title === 'string';
 
+/// A slot of a display (D56) keeps the display id in `windowId` and `display: true`.
+const slotTarget = (s) => (s.display === true
+  ? { id: s.windowId, app: s.app, title: s.title, display: true }
+  : { id: s.windowId, app: s.app, title: s.title });
+
 /// Slots from their stored JSON; anything unreadable is an empty slot.
 export function parseSlots(json) {
   let stored;
@@ -13,17 +18,27 @@ export function parseSlots(json) {
   const slots = [];
   for (let i = 0; i < SLOT_COUNT; i++) {
     const s = Array.isArray(stored) ? stored[i] : null;
-    slots.push(isSlot(s) ? { windowId: s.windowId, app: s.app, title: s.title } : null);
+    if (!isSlot(s)) { slots.push(null); continue; }
+    const kept = { windowId: s.windowId, app: s.app, title: s.title };
+    if (s.display === true) kept.display = true;
+    slots.push(kept);
   }
   return slots;
 }
 
-/// Finds a slot's window in the latest window list (D33 rules 1–4).
-/// Returns {state: 'empty'} | {state: 'window', window} | {state: 'unavailable'}.
-/// Before the first list (`windows` null) an assigned slot is used as stored.
-export function resolveSlot(slot, windows) {
+/// Finds a slot's window in the latest window list (D33 rules 1–4), or a display slot's
+/// display in the latest display list by id, then by name (D56).
+/// Returns {state: 'empty'} | {state: 'window', window} | {state: 'unavailable'}; for a display
+/// `window` is its target {id, app, title, display: true}.
+/// Before the first list (`windows` or `displays` null) an assigned slot is used as stored.
+export function resolveSlot(slot, windows, displays = null) {
   if (!slot) return { state: 'empty' };
-  if (!windows) return { state: 'window', window: { id: slot.windowId, app: slot.app, title: slot.title } };
+  if (slot.display === true) {
+    if (!displays) return { state: 'window', window: slotTarget(slot) };
+    const d = displays.find((x) => x.id === slot.windowId) ?? displays.find((x) => x.name === slot.title);
+    return d ? { state: 'window', window: { id: d.id, app: slot.app, title: d.name, display: true } } : { state: 'unavailable' };
+  }
+  if (!windows) return { state: 'window', window: slotTarget(slot) };
   const byId = windows.find((w) => w.id === slot.windowId);
   if (byId) return { state: 'window', window: byId };
   const sameApp = windows.filter((w) => w.app === slot.app);

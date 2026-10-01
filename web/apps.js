@@ -13,9 +13,9 @@ export function decodeApps(msg) {
     .map((a) => ({ id: a.id, name: a.name, running: a.running === true }));
 }
 
-/// The stored tab, 'windows' unless 'apps'.
+/// The stored tab: 'windows' unless 'apps' or 'displays' (D56).
 export function parseListTab(value) {
-  return value === 'apps' ? 'apps' : 'windows';
+  return value === 'apps' || value === 'displays' ? value : 'windows';
 }
 
 export function iconURL(id) {
