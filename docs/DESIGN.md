@@ -1530,6 +1530,7 @@ On a real iPhone against the real Mac:
 ## 16. Paste the iPhone clipboard or an image into the window (user decision; amends D11, D12)
 
 ### D36. 📋 Paste and 🖼 Image in the key panel
+> *Amended by §30 D52:* ⋯ → 📋 Copy to Mac sets the Mac clipboard without pasting (`clipboard.set`).
 > *Amended by §22 D42:* 📎 File uploads any file the same way and pastes its path.
 > *Amended by §17 D37:* the third row is ⌘F1, ⌘Tab, 📋 Paste, 🖼 Image, two columns each.
 > *Amended by §21 D41:* 📋 Paste and 🖼 Image moved into the ⋯ menu; they still act on touch end.
@@ -2319,3 +2320,20 @@ The viewer may be an iPhone or a PC browser; both are supported and the UI says 
 2. *PC browser (Chrome or Safari, page focused):* copying on the Mac shows "📋 Copied from the Mac" and the text pastes in another app on the PC. With the page unfocused, the banner appears and a mouse click on it copies.
 3. The clipboard content from before connecting is not sent; pasting from the device (📋 Paste, D36) does not come back as a banner; a password copied from a password manager that marks it concealed is not sent; copying an image sends nothing; text over 1 MiB shows "too large".
 4. *Unit:* `MacClipboardWatch` with a fake pasteboard (baseline, change, own paste, concealed/transient, 1 MiB cap) and `clipboard.mac` encoding; web toast vs banner, tap to copy with fallback, newer replaces, ✕.
+
+## 30. Copy to Mac without pasting (user decision, Issue #37; amends D36, D51)
+
+### D52. ⋯ → 📋 Copy to Mac puts this device's clipboard text on the Mac clipboard
+
+The viewer may be an iPhone or a PC browser; the UI says "this device", never "iPhone". D36 dropped D11's "Copy to Mac"; this brings it back as its own ⋯ menu item, for text the user wants to paste on the Mac later.
+
+- **Web.** The ⋯ menu lists 📋 Paste, **📋 Copy to Mac**, 🖼 Image, 📎 File, ⬇︎ Download, ⌘Q. Copy to Mac runs like 📋 Paste: `navigator.clipboard.readText()` inside the item's touchend (or click); if it is missing or refused, the D36 paste sheet opens with the same instructions ending "then copy it to the Mac." and its button reads **Copy to Mac**. Success toasts "📋 Copied to the Mac clipboard". The same 1 MiB UTF-8 limit and messages as D36 ("Text too large (max 1 MiB)").
+- **Wire.** A binary message with the D36 framing and validation: header `{"t":"clipboard.set","id":"c1"}` + UTF-8 text (1 byte – 1 MiB; over: `too_large` with the id). The reply is the existing `{"t":"result","id":…,"ok":true}` or `error`.
+- **Mac.** Only `NSPasteboard.general` changes (`clearContents`, `setString` of `.string`): no ⌘V, no window raise or focus, no input event, and it does not go through the input pipeline. The write records its change count as our own (the D51 mechanism, `MacPasteboard.writeOwnText`), so it is not sent back to the device as a D51 banner. Logs byte counts only.
+
+### D52 acceptance criteria
+1. *iPhone and PC browser:* copy text (Japanese with line breaks) on the device, open ⋯ → 📋 Copy to Mac (on iPhone tap iOS's Paste callout): the toast says "📋 Copied to the Mac clipboard", nothing is typed into the viewed window and it is not raised, and ⌘V in any Mac app later pastes the same text.
+2. No D51 banner or "Copied from the Mac" toast appears for that copy; a later ⌘C on the Mac still reaches the device.
+3. If the clipboard read is refused, the sheet appears with the button **Copy to Mac**; long-press → Paste, then Copy to Mac does the same.
+4. Text over 1 MiB shows "Text too large (max 1 MiB)", and the Mac clipboard is unchanged.
+5. *Unit:* `clipboard.set` decoding and its 1 MiB limit; through the real server, `clipboard.set` writes a fake pasteboard, posts no input, replies `result`, and is not echoed as `clipboard.mac`; web menu item, `clipboard.set` message and limit, success toast, and the fallback sheet mode.
