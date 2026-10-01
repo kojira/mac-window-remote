@@ -287,6 +287,8 @@ following:
     cumulative flags), then the key down/up with flags, then modifier keyUps in reverse.
 
 ### D10. iPhone text input: compose on the phone, send on Return
+> *Amended by §31 D53:* the field is a one-row `<textarea>` that wraps and grows with its
+> text; the Return and Backspace rules below are unchanged.
 - The input bar has a normal `<input type="text">` field, with autocorrect and
   autocapitalize off. The user types, uses Japanese IME conversion, or dictates entirely
   **on the phone**. Nothing is sent while the text is being composed.
@@ -2337,3 +2339,22 @@ The viewer may be an iPhone or a PC browser; the UI says "this device", never "i
 3. If the clipboard read is refused, the sheet appears with the button **Copy to Mac**; long-press → Paste, then Copy to Mac does the same.
 4. Text over 1 MiB shows "Text too large (max 1 MiB)", and the Mac clipboard is unchanged.
 5. *Unit:* `clipboard.set` decoding and its 1 MiB limit; through the real server, `clipboard.set` writes a fake pasteboard, posts no input, replies `result`, and is not echoed as `clipboard.mac`; web menu item, `clipboard.set` message and limit, success toast, and the fallback sheet mode.
+
+## 31. The text field wraps and grows (user decision, Issue #39; amends D10)
+
+### D53. The text field is a one-row textarea that grows with its text
+
+A one-line `<input>` hid text past its width, so after moving the caret to the start of a long text the user could not see it until typing.
+
+- **Field.** `<textarea id="text" rows="1">` with the D10 attributes (`enterkeyhint="send"`, autocorrect, autocapitalize and spellcheck off, the same placeholder). The text wraps; there is no horizontal scroll.
+- **Height.** On input, focus, and visual-viewport resize, `TextInput.fitHeight` sets the height to the wrapped content, capped at 8 lines or 40% of the visual viewport height, whichever is smaller. Past the cap it scrolls vertically; typing at the end keeps the last line in view, and elsewhere the browser keeps the caret line visible. Empty (after a send, clearing by hand) or not typing, it is one line high again.
+- **Keys.** Exactly D10: Return (not composing) sends the text and clears the field, Return on an empty field sends `key Enter`, Backspace on an empty field sends `key Backspace`, nothing is sent while composing; every send calls `preventDefault`, so Return never inserts a newline. A pasted line break is dropped, as the one-line field did.
+- **Layout.** The bottom bar's height becomes a minimum; it grows upward and its buttons (‹, ⌨︎) stay on its bottom row. The dock stays pinned above the iOS keyboard (D34); the taller bar overlaps the bottom of the stage, as the iOS keyboard does. The stage and the 📱 fit aspect (D35) do not change: the slots and 📱 are hidden while typing (D33).
+- **PC browser.** The field still opens from the key panel's **text** key (D34); while it has focus, physical keys stay in it and the key sink does not forward them (`focusedHere`), as before.
+
+### D53 acceptance criteria
+1. *iPhone:* type a text longer than the field: it wraps and the field grows upward; ‹ and ⌨︎ stay at the bottom and tappable. Move the caret to the start: it is visible.
+2. Past 8 lines (or 40% of the visible height with the keyboard up) the field stops growing and scrolls, with the caret line visible.
+3. Return sends the text without a newline and the field shrinks to one line; empty + Return sends Enter; empty + Backspace sends Backspace; Japanese IME conversion and dictation still work and send nothing while composing.
+4. *PC browser:* ⌨︎ → text → type a long text: it wraps and grows; Return sends as before; after leaving the field, physical keys go to the Mac again.
+5. *Unit:* `tests/web/textinput.test.mjs`: growth, the 8-line and 40% caps, shrink after send and clear, and the Enter/Backspace/composing rules with a textarea.
