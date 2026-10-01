@@ -55,8 +55,8 @@ The user experience, end to end:
 
 ### Non-goals (explicitly out of scope)
 
-- ~~Audio streaming.~~ §19 (D39) adds Mac → iPhone audio. Microphone audio stays out of
-  scope.
+- ~~Audio streaming.~~ §19 (D39) adds Mac → iPhone audio. ~~Microphone audio stays out of
+  scope.~~ §35 (D57) sends the viewing device's microphone to a virtual Mac input.
 - Full-desktop or multi-monitor desktop view. Only one window is streamed. The window
   may be on any display.
 - Operating a locked Mac, unlocking it, or waking a sleeping Mac.
@@ -1895,7 +1895,7 @@ On a real iPhone against the real Mac:
   - Audio is not lip-synced to the video explicitly; both paths are low-latency.
   - Sounds the Mac makes itself (system alerts from other processes) follow the mode like
     any process: All mode taps them, App mode does not.
-- **Non-goals:** microphone or phone → Mac audio; audio while the page is in the background
+- **Non-goals:** microphone or phone → Mac audio (*added later by §35 D57*); audio while the page is in the background
   (the connection closes, D15); per-app volume.
 - **Source changes:** `Package.swift` (target `WebRTCAudioDevice`), `WebRTCAudioDevice/`
   (vendored header, license), `TapAudioDevice.swift`, `SystemAudioTap.swift`,
@@ -2420,3 +2420,53 @@ A one-line `<input>` hid text past its width, so after moving the caret to the s
 7. With the Mac display asleep (not locked), starting a view (window or display) turns it on; the lock screen is untouched.
 8. Text on a full display is readable once still (the 3 Mbps floor); window mode keeps 1.5 Mbps.
 9. *Unit:* `DisplayModeTests` (target model, `view.start {displayId}` and `displays.list` decoding, `displays` and display `view.state` encoding, coordinates with several displays and the clamp, display input posts with a fake poster, no focus for a display target, the bitrate floor, and through the real server: list, view, wake, removed display); `tests/web/displays.test.mjs` (Displays tab rendering and click path, view-state matching, ☰/📱 hidden, a display in the slots).
+
+## 35. The viewing device's microphone as a Mac input (user decision D57, Issue #47; amends D39)
+
+### D57. 🎤 sends this device's microphone into BlackHole, which meeting apps on the Mac use as their microphone
+
+- **Why (user request):** join a web meeting running on the Mac (Zoom, Teams, Meet in a browser) with the viewing device (iPhone or PC browser) as the microphone, together with 🔊 for the other side. No meeting app on the device.
+- **Virtual device.** The Mac needs the open-source **BlackHole** driver, installed once by the user (`brew install blackhole-2ch` or the installer). Any Core Audio device with output channels whose name starts with `BlackHole` is accepted (2ch, 16ch, …); with several, the first 2-channel one wins, otherwise the first. The meeting app picks "BlackHole 2ch" (or the installed variant) as its microphone. Building our own driver is out of scope.
+- **Web.**
+  - A **🎤** button in the bottom bar right after 🔊, 40 pt wide, blue while on, dimmed while the permission prompt is up. Hidden while typing, like 🔊.
+  - Tap on: `getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}})` is called inside the tap (iOS needs the gesture). The track goes on the **existing audio transceiver**, which the page now creates as `sendrecv` instead of `recvonly`, through `sender.replaceTrack`: no renegotiation. Then `{"t":"mic","on":true}` on `control`.
+  - Tap off: the track is stopped (the browser's microphone indicator goes off), `replaceTrack(null)`, and `{"t":"mic","on":false}`.
+  - A denied permission: toast "Microphone access was denied. Allow it for this site in the browser settings"; the button stays off. A browser without `getUserMedia` (not a secure page): "This browser cannot use the microphone here".
+  - Every new peer connection (`onReady`) puts the live track on the new transceiver and sends `mic on` again. The page going to the background (D15 closes the connection) stops the track; the user taps 🎤 again.
+  - While the mic is on, `navigator.audioSession.type` is `play-and-record` (iOS keeps 🔊 playing while recording), `playback` otherwise.
+  - The mic state is not stored; a reload starts with 🎤 off.
+- **Mac.**
+  - `RTCPeer.answer` sets the audio transceiver to `sendrecv` (it was `sendonly`). A page that still offers `recvonly` gets `sendonly` as before.
+  - `TapAudioDevice` keeps ignoring playout until asked: `pullPlayout` calls the delegate's `getPlayoutData` for 10 ms frames (480 frames, mono, 48 kHz Int16), or returns silence unless WebRTC is playing.
+  - `MicPlayout` (on `mic on`) lists the Core Audio devices with output streams, picks BlackHole as above, and opens a `BlackHoleSink`: a **HAL output AudioUnit bound to that device ID** (`kAudioOutputUnitProperty_CurrentDevice`), input format 48 kHz Int16 interleaved stereo; the unit converts to the device's rate and format. `PlayoutPump` pulls exact 480-frame chunks, splits them over the unit's buffer sizes, and copies the mono sample to both channels. Input on the unit stays disabled. **Nothing ever plays on the system default output or the speakers**; if no BlackHole device exists, nothing is opened.
+  - The capture side (the D39 tap, `deliver`) is unchanged; the playout and the tap use separate devices and threads.
+  - `mic off`, the peer closing or failing, or the session ending (closing the peer) stops and disposes the unit. Core Audio is first touched by `mic on`.
+- **Protocol** (on `control`):
+  ```jsonc
+  // device → Mac
+  {"t":"mic","on":true|false}                         // missing or non-bool on: bad_request
+  // Mac → device
+  {"t":"mic.state","on":true,"device":"BlackHole 2ch"}
+  {"t":"mic.state","on":false}                        // after off
+  {"t":"mic.state","on":false,"error":"no-device"}    // device: toast "Install BlackHole on the Mac to use the mic (see README)", 🎤 off
+  {"t":"mic.state","on":false,"error":"failed"}       // the device could not be opened: toast, 🎤 off
+  ```
+- **Echo.** BlackHole loops the device's microphone into the meeting app only; the Mac's speakers never play it. With 🔊 on, the meeting's sound plays on the device and can reach its microphone; the browser's echo cancellation is on, and **earphones are recommended**.
+- **Limits.**
+  - Latency about 0.1–0.3 s: fine for calls, not for recording in time with music.
+  - iOS Safari stops audio when the screen locks or the page goes to the background (the connection closes, D15); a native app would be needed for that.
+  - Mono; the meeting app gets the same signal on both BlackHole channels.
+  - The meeting app must be set to BlackHole by the user; nothing switches the Mac's default input.
+- **Source changes:** `MicPlayout.swift` (new: `BlackHoleSelection`, `MicPlayout`, `PlayoutPump`, `BlackHoleSink`, `CoreAudioDevices`), `TapAudioDevice.swift` (`pullPlayout`, `outputThreadWillChange`), `RTCHost.swift` (sendrecv), `Protocol.swift` (`mic`, `mic.state`), `Session.swift` (`setMic`, stop with the peer), `MacBackend.swift`; `web/mic.js` (new), `web/rtc.js` (sendrecv transceiver, `setMicTrack`), `web/audio.js` (session type), `web/app.js`, `web/index.html`, `web/style.css`.
+
+### D57 acceptance criteria
+Setup: BlackHole installed on the Mac; a meeting test page (or any app with a microphone level meter, such as a web meeting's audio settings) open on the Mac with "BlackHole 2ch" as its microphone.
+1. *iPhone (Safari or Home Screen):* the bottom bar shows 🎤 after 🔊; it is hidden while typing. Tap 🎤: iOS asks for the microphone (first time); after Allow the button turns blue and speaking into the iPhone moves the meeting app's microphone meter within about 0.3 s. Nothing is heard from the Mac's speakers.
+2. Tap 🎤 again: the button turns off, the iPhone's microphone indicator goes away, and the meter stops.
+3. With 🔊 on as well, the other side's voice plays on the iPhone and the meeting still hears the iPhone's microphone; with earphones there is no echo.
+4. Denying the microphone permission shows the toast and leaves 🎤 off.
+5. On a Mac without BlackHole, 🎤 shows "Install BlackHole on the Mac to use the mic (see README)" and turns off.
+6. Locking the iPhone or leaving the page stops the microphone; coming back, 🎤 is off.
+7. *PC browser (Chrome or Safari):* the same with a click; the browser asks for the microphone, its indicator shows while on and goes away when off.
+8. Viewing, input, and 🔊 (D39) work as before with 🎤 off; the Mac never asks for its own microphone.
+9. *Unit:* `MicPlayoutTests` (BlackHole selection from fake device lists: prefix, 2ch preferred, none → no-device; on/off with a fake sink; 480-frame pulls into a fake sink; silence without WebRTC; `mic` / `mic.state`), `RTCAudioAnswerTests` (a sendrecv audio offer is answered sendrecv), `tests/web/mic.test.mjs` (toggle states, denied toast, no-device toast, re-attach on a new connection, hidden while typing).
