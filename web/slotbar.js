@@ -1,11 +1,12 @@
 // Quick-switch slot buttons in the viewer's bottom bar and their long-press menu (DESIGN.md D33).
 import { SLOT_COUNT, SLOTS_KEY, parseSlots, resolveSlot, decodeThumb } from './slots.js';
+import { isDisplay, sameTarget } from './displays.js';
 
 const LONG_PRESS_MS = 500;
 
 export class SlotBar {
-  /// current(): the viewed window {id, app, title}, or null.
-  /// onSwitch(window): view another window.
+  /// current(): the viewed window {id, app, title} or display (D56), or null.
+  /// onSwitch(target): view another window or display.
   /// onChange(): slots were assigned or cleared (request thumbnails now).
   constructor({ container, menu, current, onSwitch, onChange }) {
     this.menu = menu;
@@ -14,7 +15,9 @@ export class SlotBar {
     this.onChange = onChange;
     this.slots = parseSlots(localStorage.getItem(SLOTS_KEY));
     this.windows = null; // the latest window list; null until the first one arrives
+    this.displays = null; // the latest display list (D56); null until the first one arrives
     this.thumbs = new Map(); // windowId → data URL, in memory only
+    this.displayThumbs = new Map(); // displayId → data URL from the display list (D56)
     this.menuIndex = null;
     this.buttons = [];
     for (let i = 0; i < SLOT_COUNT; i++) {
@@ -58,16 +61,22 @@ export class SlotBar {
   }
 
   tap(i) {
-    const r = resolveSlot(this.slots[i], this.windows);
+    const r = this.resolve(this.slots[i]);
     if (r.state === 'empty') this.assignCurrent(i);
     else if (r.state === 'unavailable') this.openMenu(i);
-    else if (r.window.id !== this.current()?.id) this.onSwitch(r.window);
+    else if (!sameTarget(r.window, this.current())) this.onSwitch(r.window);
+  }
+
+  resolve(slot) {
+    return resolveSlot(slot, this.windows, this.displays);
   }
 
   assignCurrent(i) {
     const w = this.current();
     if (!w) return;
-    this.set(i, { windowId: w.id, app: w.app, title: w.title });
+    const slot = { windowId: w.id, app: w.app, title: w.title };
+    if (isDisplay(w)) slot.display = true;
+    this.set(i, slot);
   }
 
   set(i, slot) {
@@ -86,6 +95,7 @@ export class SlotBar {
     this.windows = windows;
     let changed = false;
     this.slots = this.slots.map((s) => {
+      if (s?.display === true) return s;
       const r = resolveSlot(s, windows);
       if (r.state !== 'window' || (r.window.id === s.windowId && r.window.title === s.title)) return s;
       changed = true;
@@ -95,10 +105,31 @@ export class SlotBar {
     this.render();
   }
 
+  /// A new display list (D56): re-resolve display slots and keep their thumbnails.
+  setDisplays(displays) {
+    this.displays = displays;
+    this.displayThumbs = new Map(displays.filter((d) => d.src).map((d) => [d.id, d.src]));
+    let changed = false;
+    this.slots = this.slots.map((s) => {
+      if (s?.display !== true) return s;
+      const r = resolveSlot(s, null, displays);
+      if (r.state !== 'window' || (r.window.id === s.windowId && r.window.title === s.title)) return s;
+      changed = true;
+      return { windowId: r.window.id, app: s.app, title: r.window.title, display: true };
+    });
+    if (changed) this.save();
+    this.render();
+  }
+
+  hasDisplaySlot() {
+    return this.slots.some((s) => s?.display === true);
+  }
+
   /// Window ids of the slots that resolve to a window, for `thumbs.request`.
   windowIds() {
     const ids = [];
     for (const s of this.slots) {
+      if (s?.display === true) continue;
       const r = resolveSlot(s, this.windows);
       if (r.state === 'window' && !ids.includes(r.window.id)) ids.push(r.window.id);
     }
@@ -113,21 +144,21 @@ export class SlotBar {
   }
 
   render() {
-    const currentId = this.current()?.id;
+    const current = this.current();
     this.slots.forEach((s, i) => {
       const b = this.buttons[i];
-      const r = resolveSlot(s, this.windows);
+      const r = this.resolve(s);
       b.textContent = '';
       b.classList.toggle('empty', r.state === 'empty');
       b.classList.toggle('unavailable', r.state === 'unavailable');
-      b.classList.toggle('current', r.state === 'window' && r.window.id === currentId);
+      b.classList.toggle('current', r.state === 'window' && sameTarget(r.window, current));
       if (r.state === 'empty') {
         b.textContent = '+';
         b.setAttribute('aria-label', 'Empty slot: assign the current window');
         return;
       }
       b.setAttribute('aria-label', `${s.app} — ${s.title || '(untitled)'}`);
-      const src = r.state === 'window' && this.thumbs.get(r.window.id);
+      const src = r.state === 'window' && (isDisplay(r.window) ? this.displayThumbs : this.thumbs).get(r.window.id);
       if (src) {
         const img = document.createElement('img');
         img.src = src;

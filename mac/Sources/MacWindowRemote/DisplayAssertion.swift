@@ -4,6 +4,7 @@ import IOKit.pwr_mgt
 final class DisplayAssertion {
     private var id: IOPMAssertionID = 0
     private var held = false
+    private var activityId: IOPMAssertionID = 0
 
     func hold() {
         guard !held else { return }
@@ -18,5 +19,13 @@ final class DisplayAssertion {
         guard held else { return }
         IOPMAssertionRelease(id)
         held = false
+    }
+
+    /// Wakes a display that is already asleep when a viewer starts viewing (#49 part 1, D56):
+    /// the idle-sleep assertion above does not turn a sleeping display on. The lock screen is
+    /// left alone. Passing the same id again renews one activity assertion.
+    func declareUserActivity() {
+        IOPMAssertionDeclareUserActivity("mac-window-remote viewer started" as CFString,
+                                         kIOPMUserActiveLocal, &activityId)
     }
 }

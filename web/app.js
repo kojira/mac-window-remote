@@ -10,6 +10,9 @@ import { KeyPanel } from './keypanel.js';
 import { MenuSheet, decodeMenu } from './appmenu.js';
 import { FileSheet, startDownload } from './files.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
+import {
+  decodeDisplays, displayTarget, isDisplay, renderDisplayList, viewStartMessage, viewStateMatches, viewerControls,
+} from './displays.js';
 import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
@@ -17,7 +20,8 @@ import {
   readClipboardForMac, shortPath,
 } from './upload.js';
 
-/// The viewed window {id, app, title} (D33: slots store the app and title too).
+/// The viewed window {id, app, title} (D33: slots store the app and title too), or a display
+/// {id, app, title, display: true} (D56).
 const WINDOW_KEY = 'mwr.window';
 /// While the viewer is visible, the window list and slot thumbnails refresh this often (D33).
 const THUMBS_REFRESH_MS = 10000;
@@ -127,10 +131,11 @@ function refreshList() {
   }
   if (!permissions.screenRecording) {
     $('windows').textContent = '';
+    $('displays').textContent = '';
     listMessage('Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
     return;
   }
-  send({ t: 'windows.list' });
+  send({ t: listTab === 'displays' ? 'displays.list' : 'windows.list' });
 }
 
 $('refresh').addEventListener('click', () => {
@@ -143,15 +148,19 @@ $('back').addEventListener('click', () => {
 });
 
 /// From the list, or a quick-switch slot while viewing (D33): the peer connection stays.
+/// `w` is a window or a display target (D56).
 function openWindow(w) {
   enterViewer(w);
-  send({ t: 'view.start', windowId: w.id });
+  send(viewStartMessage(w));
   refreshSlots();
 }
 
-/// Shows the viewer for window `w` {id, app, title}; the caller or the Mac starts the view.
+/// Shows the viewer for window `w` {id, app, title} or a display target (D56); the caller or
+/// the Mac starts the view.
 function enterViewer(w) {
-  sessionStorage.setItem(WINDOW_KEY, JSON.stringify({ id: w.id, app: w.app, title: w.title }));
+  const stored = { id: w.id, app: w.app, title: w.title };
+  if (isDisplay(w)) stored.display = true;
+  sessionStorage.setItem(WINDOW_KEY, JSON.stringify(stored));
   viewer.clear();
   show('viewer');
   focusKeySink();
@@ -174,7 +183,10 @@ function setListTab(tab) {
   }
   $('windows').hidden = tab !== 'windows';
   $('apps').hidden = tab !== 'apps';
-  if (tab === 'apps') $('windows').textContent = ''; else $('apps').textContent = '';
+  $('displays').hidden = tab !== 'displays';
+  if (tab !== 'windows') $('windows').textContent = '';
+  if (tab !== 'apps') $('apps').textContent = '';
+  if (tab !== 'displays') $('displays').textContent = '';
   listMessage('');
   clearAppOpening();
   if (screen === 'list') refreshList();
@@ -189,6 +201,16 @@ function renderApps(msg) {
   const apps = decodeApps(msg);
   renderAppGrid($('apps'), apps, openApp);
   listMessage(apps.length === 0 ? 'No apps in the Dock.' : '');
+}
+
+// ---------- Displays (D56) ----------
+
+function onDisplays(msg) {
+  const displays = decodeDisplays(msg);
+  slotBar.setDisplays(displays);
+  if (screen !== 'list' || listTab !== 'displays' || !permissions.screenRecording) return;
+  renderDisplayList($('displays'), displays, (d) => openWindow(displayTarget(d)));
+  listMessage(displays.length === 0 ? 'No displays found.' : '');
 }
 
 /// The Mac launches or activates the app and answers `view.switched` for its front window, or
@@ -256,6 +278,10 @@ function onViewSwitched(msg) {
 const fittedWindows = new Map();
 
 function renderFitWindow() {
+  // D56: a display has no app menu and no window to fit.
+  const controls = viewerControls(viewingTarget());
+  $('app-menu').hidden = !controls.appMenu;
+  $('fit-window').hidden = !controls.fitWindow;
   const b = $('fit-window');
   const on = fittedWindows.get(viewingWindowId()) === true;
   b.classList.toggle('active', on);
@@ -286,12 +312,18 @@ function onWindowFit(msg) {
   if (msg.clamped) toast(msg.state === 'fitted' ? 'The app limits this window\'s size' : 'The app limited the restored size');
 }
 
-/// The viewed window {id, app, title}, or null.
-function viewingWindow() {
+/// The viewed window or display (D56), or null.
+function viewingTarget() {
   try {
     const w = JSON.parse(sessionStorage.getItem(WINDOW_KEY));
     return w && Number.isInteger(w.id) ? w : null;
   } catch { return null; }
+}
+
+/// The viewed window {id, app, title}, or null (also while a display is viewed).
+function viewingWindow() {
+  const t = viewingTarget();
+  return isDisplay(t) ? null : t;
 }
 
 function viewingWindowId() {
@@ -362,9 +394,12 @@ function onAudioState(msg) {
 
 // ---------- quick-switch slots (D33) ----------
 
-/// A fresh window list re-resolves the slots; its reply requests the thumbnails.
+/// A fresh window list re-resolves the slots; its reply requests the thumbnails. A display in
+/// a slot (D56) needs the display list, whose thumbnails come with it.
 function refreshSlots() {
-  if (screen === 'viewer') send({ t: 'windows.list' });
+  if (screen !== 'viewer') return;
+  send({ t: 'windows.list' });
+  if (slotBar.hasDisplaySlot()) send({ t: 'displays.list' });
 }
 
 function requestThumbs() {
@@ -415,7 +450,7 @@ function connect() {
   replaced = false;
   authed = false;
   setConnDots('wait');
-  if (screen === null || screen === 'denied') show(viewingWindowId() ? 'viewer' : 'list');
+  if (screen === null || screen === 'denied') show(viewingTarget() ? 'viewer' : 'list');
   const ws = new WebSocket(wsURL());
   socket = ws;
   ws.onopen = () => armDeadTimer();
@@ -519,7 +554,7 @@ function onMessage(msg) {
       backoffIndex = 0;
       permissions = msg.permissions || permissions;
       setConnDots('on');
-      if (!(screen === 'viewer' && viewingWindowId() != null)) show('list');
+      if (!(screen === 'viewer' && viewingTarget() != null)) show('list');
       // Video and input need the peer connection; the list and viewing continue once it is
       // connected (D22 step 5).
       link.start();
@@ -538,6 +573,9 @@ function onMessage(msg) {
       break;
     case 'apps':
       renderApps(msg);
+      break;
+    case 'displays':
+      onDisplays(msg);
       break;
     case 'view.state':
       onViewState(msg);
@@ -580,12 +618,12 @@ function onMessage(msg) {
 /// The peer connection is connected and `control` is open: resume the viewer or the list.
 function onVideoReady() {
   if (!link.send({ t: 'audio', mode: audioMode.resend() })) audioMode.unsent();
-  if (screen === 'viewer' && viewingWindowId() != null) {
+  if (screen === 'viewer' && viewingTarget() != null) {
     viewer.clear();
     viewer.setDimmed(false);
     viewMessage(permissions.screenRecording ? ''
       : 'Screen Recording permission is missing on the Mac. Open the Mac menu bar app → Setup.');
-    send({ t: 'view.start', windowId: viewingWindowId() });
+    send(viewStartMessage(viewingTarget()));
     refreshSlots();
   } else {
     show('list');
@@ -613,7 +651,8 @@ function onControl(msg) {
 }
 
 function onViewState(msg) {
-  if (screen !== 'viewer' || msg.windowId !== viewingWindowId()) return;
+  const target = viewingTarget();
+  if (screen !== 'viewer' || !viewStateMatches(msg, target)) return;
   switch (msg.state) {
     case 'starting':
       break;
@@ -623,8 +662,9 @@ function onViewState(msg) {
       viewer.awaitFirstFrame();
       break;
     case 'window_gone':
+      // D56: a disconnected display ends the view the same way as a closed window.
       showList();
-      toast('Window closed');
+      toast(isDisplay(target) ? 'Display disconnected' : 'Window closed');
       break;
     case 'capture_unavailable':
       viewer.setDimmed(true);
@@ -729,7 +769,7 @@ function sendBinary(bytes) {
 }
 
 function canUpload() {
-  if (screen !== 'viewer' || viewingWindowId() == null) { toast('Open a window first'); return false; }
+  if (screen !== 'viewer' || viewingTarget() == null) { toast('Open a window first'); return false; }
   if (!socket || !authed || socket.readyState !== WebSocket.OPEN) { toast('Not connected to the Mac'); return false; }
   return true;
 }
@@ -925,7 +965,7 @@ $('fit').addEventListener('click', () => viewer.fit());
 const slotBar = new SlotBar({
   container: $('slots'),
   menu: $('slot-menu'),
-  current: () => (screen === 'viewer' ? viewingWindow() : null),
+  current: () => (screen === 'viewer' ? viewingTarget() : null),
   onSwitch: (w) => openWindow(w),
   onChange: requestThumbs,
 });

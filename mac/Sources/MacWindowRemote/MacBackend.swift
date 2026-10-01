@@ -7,6 +7,8 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     private let onViewing: @Sendable (WindowItem?) -> Void
     private let lock = NSLock()
     private var viewing: WindowItem?
+    /// The viewed display (D56), for the display assertion alongside `viewing`.
+    private var viewingDisplay: DisplayItem?
     private let displayAssertion = DisplayAssertion()
     private let resizer = WindowResizer()
     /// The latest capture, whose composite the input maps to (D44).
@@ -166,11 +168,56 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
     }
 
     func viewingChanged(_ window: WindowItem?) {
-        lock.lock()
-        viewing = window
-        lock.unlock()
-        if window != nil { displayAssertion.hold() } else { displayAssertion.release() }
+        let any = lock.withLock {
+            viewing = window
+            return window != nil || viewingDisplay != nil
+        }
+        if any { displayAssertion.hold() } else { displayAssertion.release() }
         onViewing(window)
+    }
+
+    // MARK: Display mode (D56)
+
+    func listDisplays() async throws -> [DisplayItem] { try await DisplayCatalog.list() }
+
+    func startDisplayCapture(displayId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> DisplayCaptureStart {
+        let displays: [SCDisplay]
+        do {
+            displays = try await DisplayCatalog.displays()
+        } catch {
+            log.error("shareable content failed: \(String(describing: error), privacy: .public)")
+            return .unavailable(reason: Permissions.screenRecording ? "stream_stopped" : "permission_screen_recording")
+        }
+        guard let display = displays.first(where: { $0.displayID == displayId }) else { return .displayGone }
+        let capture = DisplayCaptureSession(display: display, capturer: rtc.capturer, events: events)
+        do {
+            try await capture.start()
+        } catch {
+            log.error("display capture start failed id=\(displayId, privacy: .public): \(String(describing: error), privacy: .public)")
+            return .unavailable(reason: "stream_stopped")
+        }
+        log.info("display capture started id=\(displayId, privacy: .public)")
+        let names = await MainActor.run { DisplayCatalog.names() }
+        return .started(capture, DisplayCatalog.item(for: display, names: names))
+    }
+
+    func displayCursor(displayId: UInt32) async -> CursorState? {
+        guard let frame = DisplayCatalog.frame(displayId) else { return nil }
+        // CGEvent locations are global CG coordinates, like the display frame.
+        guard let mouse = CGEvent(source: nil)?.location else { return nil }
+        return DisplayGeometry.cursor(at: mouse, in: frame)
+    }
+
+    func viewingDisplayChanged(_ display: DisplayItem?) {
+        let any = lock.withLock {
+            viewingDisplay = display
+            return display != nil || viewing != nil
+        }
+        if any { displayAssertion.hold() } else { displayAssertion.release() }
+    }
+
+    func declareUserActivity() {
+        displayAssertion.declareUserActivity()
     }
 
     private func pid(for windowId: UInt32) -> pid_t? {
@@ -203,12 +250,17 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             log.info("input rejected kind=\(kind, privacy: .public) reason=permission_accessibility")
             return .permissionAccessibility
         }
-        guard let windowBounds = WindowCatalog.currentBounds(action.windowId), let pid = pid(for: action.windowId) else {
+        let windowId: UInt32
+        switch action.target {
+        case .window(let id): windowId = id
+        case .display(let displayId): return await performOnDisplay(action, displayId: displayId)
+        }
+        guard let windowBounds = WindowCatalog.currentBounds(windowId), let pid = pid(for: windowId) else {
             log.info("input rejected kind=\(kind, privacy: .public) reason=window_not_found")
             return .windowNotFound
         }
         // With child windows the video is the composite area, so the cursor maps to it (D44).
-        let composite = lock.withLock { capture?.windowId == action.windowId ? capture?.composite : nil }
+        let composite = lock.withLock { capture?.windowId == windowId ? capture?.composite : nil }
         let bounds = composite?.rect ?? windowBounds
         let p = action.cursor.globalPoint(in: bounds)
         if case .move = action.kind {
@@ -224,22 +276,22 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         switch action.kind {
         case .dragEnd, .mouseButton(_, false, _): break
         default:
-            var target: ChildWindows.Entry? = ChildWindows.Entry(id: action.windowId, pid: pid, layer: 0, frame: windowBounds)
+            var target: ChildWindows.Entry? = ChildWindows.Entry(id: windowId, pid: pid, layer: 0, frame: windowBounds)
             var isClick = false
             if let composite {
                 let entries = ChildWindows.onScreenEntries()
                 switch action.kind {
                 case .click, .rightClick, .dragStart, .mouseButton(_, true, _):
                     isClick = true
-                    switch ChildWindows.clickFocus(at: p, viewedId: action.windowId, viewedFrame: windowBounds,
+                    switch ChildWindows.clickFocus(at: p, viewedId: windowId, viewedFrame: windowBounds,
                                                    pid: pid, childIds: composite.childIds, entries: entries) {
                     case .post: target = nil
                     case .raise(let entry): target = entry
                     }
                 default:
-                    let id = ChildWindows.keyTarget(viewedId: action.windowId, childIds: composite.childIds,
+                    let id = ChildWindows.keyTarget(viewedId: windowId, childIds: composite.childIds,
                                                     entries: entries)
-                    if id != action.windowId, let childBounds = WindowCatalog.currentBounds(id) {
+                    if id != windowId, let childBounds = WindowCatalog.currentBounds(id) {
                         target = ChildWindows.Entry(id: id, pid: pid, layer: 0, frame: childBounds)
                     }
                 }
@@ -251,7 +303,7 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
             }
             if isClick {
                 let targetId = target.map { String($0.id) } ?? "topmost"
-                log.notice("click target id=\(targetId, privacy: .public) viewed=\(action.windowId, privacy: .public) layer=\(target?.layer ?? -1, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
+                log.notice("click target id=\(targetId, privacy: .public) viewed=\(windowId, privacy: .public) layer=\(target?.layer ?? -1, privacy: .public) focus=\(focus.rawValue, privacy: .public)")
             }
         }
         switch action.kind {
@@ -316,6 +368,46 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         let total = ContinuousClock.now - started
         log.info("input posted kind=\(kind, privacy: .public) focus=\(focus.rawValue, privacy: .public) performMs=\(total.milliseconds, privacy: .public) sinceReceiptMs=\((ContinuousClock.now - action.received).milliseconds, privacy: .public)")
         return nil
+    }
+}
+
+extension MacBackend {
+    /// D56: no raise or activate; the events go to the point, keys to the focused app.
+    private func performOnDisplay(_ action: InputAction, displayId: UInt32) async -> ErrorCode? {
+        guard let frame = DisplayCatalog.frame(displayId) else {
+            log.info("input rejected kind=\(action.kind.logName, privacy: .public) reason=display_not_found")
+            return .windowNotFound
+        }
+        var clicks = 1
+        switch action.kind {
+        case .click:
+            clicks = clickCounter.register(at: action.cursor.globalPoint(in: frame),
+                                           time: ProcessInfo.processInfo.systemUptime,
+                                           interval: NSEvent.doubleClickInterval)
+        case .move, .scroll: break
+        default: clickCounter.reset()
+        }
+        return await DisplayInput.perform(action, frame: frame, clickState: clicks, poster: InjectorPoster())
+    }
+}
+
+/// `DisplayEventPoster` over `InputInjector` (D56).
+struct InjectorPoster: DisplayEventPoster {
+    func move(to p: CGPoint) async { await InputInjector.move(to: p) }
+    func click(at p: CGPoint, clickState: Int) async { await InputInjector.click(at: p, clickState: clickState) }
+    func rightClick(at p: CGPoint) async { await InputInjector.rightClick(at: p) }
+    func buttonDown(_ button: CGMouseButton, at p: CGPoint, clickState: Int) async {
+        await InputInjector.buttonDown(button, at: p, clickState: clickState)
+    }
+    func buttonUp(_ button: CGMouseButton, at p: CGPoint, clickState: Int) async {
+        await InputInjector.buttonUp(button, at: p, clickState: clickState)
+    }
+    func scroll(at p: CGPoint, dx: Double, dy: Double) async { await InputInjector.scroll(at: p, dx: dx, dy: dy) }
+    func key(_ name: String, mods: [KeyModifier]) async { await InputInjector.key(name, mods: mods) }
+    func type(_ text: String) async { await InputInjector.type(text) }
+    func paste(_ text: String) async {
+        await MainActor.run { SystemPasteboard.shared.writeOwnText(text) }
+        await InputInjector.key("v", mods: [.cmd])
     }
 }
 
