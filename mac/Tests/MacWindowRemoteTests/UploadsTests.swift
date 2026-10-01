@@ -206,6 +206,20 @@ import Testing
         #expect(m == .clipboardPaste(id: "c1", text: "こんにちは\nworld"))
     }
 
+    @Test func decodesClipboardSetWithTheSameLimits() throws {
+        let m = try BinaryClientMessage.decode(Self.frame(#"{"t":"clipboard.set","id":"s1"}"#, Data("行1\n行2".utf8)))
+        #expect(m == .clipboardSet(id: "s1", text: "行1\n行2"))
+        let max = Data(repeating: 0x61, count: BinaryClientMessage.maxClipboardBytes)
+        #expect(try BinaryClientMessage.decode(Self.frame(#"{"t":"clipboard.set","id":"s2"}"#, max))
+                == .clipboardSet(id: "s2", text: String(repeating: "a", count: BinaryClientMessage.maxClipboardBytes)))
+        #expect(throws: UploadRejection(id: "s3", code: .tooLarge)) {
+            try BinaryClientMessage.decode(Self.frame(#"{"t":"clipboard.set","id":"s3"}"#, max + Data([0x61])))
+        }
+        #expect(throws: ProtocolError.invalidValue("text")) {
+            try BinaryClientMessage.decode(Self.frame(#"{"t":"clipboard.set","id":"s4"}"#))
+        }
+    }
+
     @Test func clipboardIsAtMostOneMiB() throws {
         let max = Data(repeating: 0x61, count: BinaryClientMessage.maxClipboardBytes)
         #expect(try BinaryClientMessage.decode(Self.frame(#"{"t":"clipboard.paste","id":"c1"}"#, max))

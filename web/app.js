@@ -13,7 +13,8 @@ import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppG
 import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
-  FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages, shortPath,
+  CLIPBOARD_MODES, FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages,
+  readClipboardForMac, shortPath,
 } from './upload.js';
 
 /// The viewed window {id, app, title} (D33: slots store the app and title too).
@@ -733,32 +734,33 @@ function canUpload() {
   return true;
 }
 
-/// 📋: runs inside the tap, so iOS allows the clipboard read (it shows its Paste callout).
-/// Without readText, or when it is refused, the fallback sheet opens (D5).
-function pasteClipboard() {
+/// 📋 Paste (D36) and 📋 Copy to Mac (D52): the clipboard read runs inside the tap.
+function clipboardToMac(mode) {
   if (!canUpload()) return;
-  if (!navigator.clipboard?.readText) { openPasteSheet(); return; }
-  navigator.clipboard.readText().then((text) => {
-    if (!text) { toast('The iPhone clipboard has no text'); return; }
-    sendClipboardText(text);
-  }, () => openPasteSheet());
+  readClipboardForMac({ clipboard: navigator.clipboard ?? null, mode, sendText: sendClipboardText, openSheet: openPasteSheet, toast });
 }
 
 /// Returns true if the text was sent.
-function sendClipboardText(text) {
+function sendClipboardText(text, mode) {
   if (!canUpload()) return false;
   const id = nextUploadId('c');
-  const message = clipboardMessage(id, text);
+  const message = clipboardMessage(id, text, mode);
   if (!message) {
     toast(text ? 'Text too large (max 1 MiB)' : 'Nothing to paste');
     return false;
   }
-  pendingUploads.set(id, { kind: 'clipboard', chars: [...text].length });
+  pendingUploads.set(id, { kind: 'clipboard', mode, chars: [...text].length });
   if (!sendBinary(message)) { pendingUploads.delete(id); toast('Not connected to the Mac'); return false; }
   return true;
 }
 
-function openPasteSheet() {
+/// The fallback sheet's mode ('paste' or 'copy') while it is open.
+let pasteSheetMode = 'paste';
+
+function openPasteSheet(mode) {
+  pasteSheetMode = mode;
+  $('paste-sheet-action').textContent = CLIPBOARD_MODES[mode].sheetText;
+  $('paste-send').textContent = CLIPBOARD_MODES[mode].sheetButton;
   const sheet = $('paste-sheet');
   $('paste-text').value = '';
   sheet.hidden = false;
@@ -773,7 +775,7 @@ function closePasteSheet() {
 $('paste-send').addEventListener('click', () => {
   const text = $('paste-text').value;
   if (!text) { toast('Long-press the box and choose Paste'); return; }
-  if (sendClipboardText(text)) closePasteSheet();
+  if (sendClipboardText(text, pasteSheetMode)) closePasteSheet();
 });
 $('paste-cancel').addEventListener('click', closePasteSheet);
 
@@ -861,7 +863,7 @@ function onUploadReply(msg) {
   pendingUploads.delete(msg.id);
   if (msg.t === 'result') {
     if (pending.kind === 'image' || pending.kind === 'file') toast(`Pasted path: ${shortPath(msg.path || '')}`);
-    else toast(`Pasted ${pending.chars} chars`);
+    else toast(CLIPBOARD_MODES[pending.mode].done(pending.chars));
     return;
   }
   switch (msg.code) {
@@ -946,7 +948,7 @@ const keyPanel = new KeyPanel({
   textInput,
   sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
   onLayout: (change) => viewer.keepZoom(change),
-  onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile, download: openFiles }[action]?.()),
+  onAction: (action) => ({ paste: () => clipboardToMac('paste'), copy: () => clipboardToMac('copy'), image: pickImage, file: pickFile, download: openFiles }[action]?.()),
 });
 
 // Text copied on the Mac goes to this device's clipboard (D51).

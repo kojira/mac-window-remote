@@ -9,7 +9,8 @@ protocol PasteboardReading: Sendable {
     /// Changes whenever any app (or our own D36 paste) sets the pasteboard. Reading it does not
     /// read the contents.
     var changeCount: Int { get }
-    /// The change count our own D36 paste produced last, or nil; that change is not sent back.
+    /// The change count our own D36 paste or D52 copy produced last, or nil; that change is not
+    /// sent back.
     var ownWriteChangeCount: Int? { get }
     /// The current item's types, e.g. `public.utf8-plain-text`, `org.nspasteboard.ConcealedType`.
     var types: [String] { get }
@@ -51,10 +52,17 @@ struct MacClipboardWatch {
     }
 }
 
-/// `NSPasteboard.general`. The D36 paste writes through `setForPaste`, which records the
-/// resulting change count under the same lock the change count is read with, so the watch
-/// never sees our write without also seeing that it is ours.
-final class SystemPasteboard: PasteboardReading, @unchecked Sendable {
+/// The Mac pasteboard the device's text is written to (D36 paste, D52 Copy to Mac). A write
+/// records its change count as `ownWriteChangeCount`, so D51 does not send it back.
+protocol MacPasteboard: PasteboardReading {
+    /// Replaces the pasteboard with `text` (string only) and remembers the change as ours.
+    func writeOwnText(_ text: String)
+}
+
+/// `NSPasteboard.general`. `writeOwnText` records the resulting change count under the same
+/// lock the change count is read with, so the watch never sees our write without also seeing
+/// that it is ours.
+final class SystemPasteboard: MacPasteboard, @unchecked Sendable {
     static let shared = SystemPasteboard()
 
     private let lock = NSLock()
@@ -65,8 +73,7 @@ final class SystemPasteboard: PasteboardReading, @unchecked Sendable {
     var types: [String] { (NSPasteboard.general.types ?? []).map(\.rawValue) }
     func string() -> String? { NSPasteboard.general.string(forType: .string) }
 
-    /// Sets the pasteboard to `text` for a D36 paste and remembers the change as ours.
-    func setForPaste(_ text: String) {
+    func writeOwnText(_ text: String) {
         lock.withLock {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()

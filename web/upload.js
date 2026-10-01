@@ -1,4 +1,4 @@
-// Clipboard text, image, and file uploads to the Mac (DESIGN.md D36, D42): binary WebSocket framing
+// Clipboard text, image, and file uploads to the Mac (DESIGN.md D36, D42, D52): binary WebSocket framing
 // (§4.1) and the size limits. Pure functions; app.js does the sending.
 
 /// Clipboard text is at most 1 MiB of UTF-8 (D11).
@@ -20,11 +20,42 @@ export function encodeBinaryMessage(header, payload) {
   return out;
 }
 
-/// The `clipboard.paste` message, or null when the text is empty or over 1 MiB of UTF-8.
-export function clipboardMessage(id, text) {
+/// 📋 Paste (D36) pastes this device's clipboard text into the window; 📋 Copy to Mac (D52) only
+/// puts it on the Mac clipboard. Each has its message type, fallback sheet text, and toasts.
+export const CLIPBOARD_MODES = {
+  paste: {
+    t: 'clipboard.paste',
+    sheetText: 'then paste it into the window.',
+    sheetButton: 'Paste into window',
+    empty: 'The iPhone clipboard has no text',
+    done: (chars) => `Pasted ${chars} chars`,
+  },
+  copy: {
+    t: 'clipboard.set',
+    sheetText: 'then copy it to the Mac.',
+    sheetButton: 'Copy to Mac',
+    empty: "This device's clipboard has no text",
+    done: () => '📋 Copied to the Mac clipboard',
+  },
+};
+
+/// The `clipboard.paste` (or, for mode 'copy', `clipboard.set`) message, or null when the text
+/// is empty or over 1 MiB of UTF-8.
+export function clipboardMessage(id, text, mode = 'paste') {
   const bytes = new TextEncoder().encode(text);
   if (bytes.length === 0 || bytes.length > CLIPBOARD_MAX_BYTES) return null;
-  return encodeBinaryMessage({ t: 'clipboard.paste', id }, bytes);
+  return encodeBinaryMessage({ t: CLIPBOARD_MODES[mode].t, id }, bytes);
+}
+
+/// Runs inside the tap (iOS allows the clipboard read only then and shows its Paste callout).
+/// clipboard: navigator.clipboard or null. sendText(text, mode) sends it; without readText, or
+/// when it is refused, openSheet(mode) opens the fallback sheet (D5).
+export function readClipboardForMac({ clipboard, mode, sendText, openSheet, toast }) {
+  if (!clipboard?.readText) { openSheet(mode); return Promise.resolve(); }
+  return clipboard.readText().then((text) => {
+    if (!text) { toast(CLIPBOARD_MODES[mode].empty); return; }
+    sendText(text, mode);
+  }, () => openSheet(mode));
 }
 
 /// The `image.chunk` messages of an image, in order.

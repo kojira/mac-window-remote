@@ -91,10 +91,10 @@ test('space and ⏎ send Space and Enter with the active modifiers, then repeat 
   assert.deepEqual(sent, [['Enter', ['shift']], ['Space', ['cmd']], ['Space', ['cmd']], ['Space', ['cmd']]]);
 });
 
-test('⋯ opens a menu with 📋 Paste, 🖼 Image, 📎 File, ⬇︎ Download, ⌘Q; ⋯ again closes it', () => {
+test('⋯ opens a menu with 📋 Paste, 📋 Copy to Mac, 🖼 Image, 📎 File, ⬇︎ Download, ⌘Q; ⋯ again closes it', () => {
   const { kp, key, tap } = setup();
   tap(key('⋯'));
-  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '🖼 Image', '📎 File', '⬇︎ Download', '⌘Q']);
+  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '📋 Copy to Mac', '🖼 Image', '📎 File', '⬇︎ Download', '⌘Q']);
   assert.ok(key('⋯').classList.contains('active'));
   tap(key('⋯'));
   assert.equal(kp.isMenuOpen(), false);
@@ -113,6 +113,17 @@ test('Paste and Image run inside the menu item touchend, then the menu closes', 
   tap(key('⋯'));
   tap(item('🖼 Image'));
   assert.deepEqual(actions, ['paste', 'image']);
+  assert.equal(kp.isMenuOpen(), false);
+});
+
+test('📋 Copy to Mac runs its action inside the item touchend, then the menu closes (D52)', () => {
+  const { kp, key, item, tap, actions } = setup();
+  tap(key('⋯'));
+  const copy = item('📋 Copy to Mac');
+  copy.dispatch('touchstart');
+  assert.deepEqual(actions, []);
+  copy.dispatch('touchend');
+  assert.deepEqual(actions, ['copy']);
   assert.equal(kp.isMenuOpen(), false);
 });
 
