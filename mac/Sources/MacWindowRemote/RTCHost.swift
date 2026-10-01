@@ -137,10 +137,12 @@ final class RTCPeer: NSObject, RTCPeerConnectionDelegate, RTCDataChannelDelegate
             // under one name and picks the latter; the answer's codec list shows the effect.
             transceiver.setCodecPreferences(host.h264Capabilities)
         }
-        // D39: the phone's recvonly audio transceiver gets the tap's track (older pages have none).
+        // D39: the phone's audio transceiver gets the tap's track (older pages have none).
+        // D57: sendrecv, so a page that offers sendrecv can send its microphone back; a recvonly
+        // offer still gets a sendonly answer.
         if let audio = connection.transceivers.first(where: { $0.mediaType == .audio }), audio.sender.track == nil {
             var error: NSError?
-            audio.setDirection(.sendOnly, error: &error)
+            audio.setDirection(.sendRecv, error: &error)
             if let error { throw error }
             audio.sender.track = host.audioTrack
         }

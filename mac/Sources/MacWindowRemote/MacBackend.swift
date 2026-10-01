@@ -34,6 +34,17 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         return tap != nil
     }
 
+    /// D57: Core Audio is touched only when the device turns the mic on.
+    private lazy var mic: MicPlayout = { [rtc] in
+        MicPlayout(listDevices: CoreAudioDevices.outputDevices,
+                   openSink: { try BlackHoleSink(device: $0, audioDevice: rtc.audioDevice) })
+    }()
+
+    func setMic(_ on: Bool) -> MicOutcome {
+        let mic = lock.withLock { self.mic }
+        return mic.set(on)
+    }
+
     func permissions() -> PermissionsStatus { Permissions.status }
 
     func listWindows() async throws -> [WindowItem] { try await WindowCatalog.list() }

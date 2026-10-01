@@ -90,6 +90,8 @@ enum ClientMessage: Equatable {
     case windowRestore
     /// Play Mac audio on the phone: off, the viewed window's app, or the whole Mac (D39).
     case audio(mode: AudioMode)
+    /// D57: the viewing device's microphone on or off; while on, its audio plays into BlackHole.
+    case mic(on: Bool)
     /// The Apps tab list (D40).
     case appsList
     /// Launch or activate an app of the last list and view its front window (D40).
@@ -170,6 +172,7 @@ extension ClientMessage {
         let paths: [String]?
         let sort: String?
         let desc: Bool?
+        let on: Bool?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -292,6 +295,8 @@ extension ClientMessage {
                 throw ProtocolError.invalidValue("mode")
             }
             return .audio(mode: mode)
+        case "mic":
+            return .mic(on: try require(e.on, "on"))
         case "apps.list":
             return .appsList
         case "app.open":
@@ -348,7 +353,7 @@ extension ClientMessage {
              .filesList, .filesSearch, .downloadRequest:
             return .socket
         case .move, .scroll, .point: return .motion
-        case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio: return .control
+        case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio, .mic: return .control
         }
     }
 
@@ -373,6 +378,7 @@ extension ClientMessage {
         case .windowFitPhone: return "window.fitPhone"
         case .windowRestore: return "window.restore"
         case .audio: return "audio"
+        case .mic: return "mic"
         case .appsList: return "apps.list"
         case .appOpen: return "app.open"
         case .menuList: return "menu.list"
@@ -513,6 +519,8 @@ enum ServerMessage {
     case viewSwitched(windowId: UInt32, app: String, title: String)
     /// The audio mode the Mac applies (D39): the echo of `audio`, or `off` after a failure.
     case audioState(mode: AudioMode)
+    /// D57: the reply to `mic`.
+    case micState(MicOutcome)
     /// The Apps tab list (D40).
     case apps([AppItem])
     /// The viewed app's menus (D43); `gen` names this listing for `menu.press`.
@@ -568,6 +576,7 @@ enum ServerMessage {
         let t = "clipboard.mac"; let seq: Int; let text: String?; let truncated: Bool?
     }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
+    private struct Mic: Encodable { let t = "mic.state"; let on: Bool; let device: String?; let error: String? }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
     private struct Ice: Encodable {
@@ -618,6 +627,15 @@ enum ServerMessage {
             data = try? encoder.encode(Switched(windowId: id, app: app, title: title))
         case .audioState(let mode):
             data = try? encoder.encode(Audio(mode: mode))
+        case .micState(let outcome):
+            let mic: Mic
+            switch outcome {
+            case .on(let device): mic = Mic(on: true, device: device, error: nil)
+            case .off: mic = Mic(on: false, device: nil, error: nil)
+            case .noDevice: mic = Mic(on: false, device: nil, error: "no-device")
+            case .failed: mic = Mic(on: false, device: nil, error: "failed")
+            }
+            data = try? encoder.encode(mic)
         case .apps(let items):
             data = try? encoder.encode(Apps(items: items))
         case .menu(let gen, let windowId, let listing):

@@ -36,6 +36,8 @@ protocol SessionBackend: Sendable {
     /// Starts, retargets, or (nil) stops the Mac audio tap (D39). False if this Mac cannot tap
     /// audio (macOS before 14.2).
     func setAudio(_ target: AudioTarget?, events: @escaping @Sendable (AudioEvent) -> Void) -> Bool
+    /// D57: plays (or stops playing) the viewing device's microphone into BlackHole.
+    func setMic(_ on: Bool) -> MicOutcome
     /// The Apps tab list; it becomes the allowlist for `openApp` and `appIcon` (D40).
     func listApps() async -> [AppItem]
     /// The PNG icon of an app in the last list, or nil for an unknown id (D40).
@@ -66,6 +68,11 @@ extension SessionBackend {
     func displayCursor(displayId: UInt32) async -> CursorState? { nil }
     func viewingDisplayChanged(_ display: DisplayItem?) {}
     func declareUserActivity() {}
+}
+
+/// Backends without a microphone path (D57): the test fakes of other features.
+extension SessionBackend {
+    func setMic(_ on: Bool) -> MicOutcome { on ? .noDevice : .off }
 }
 
 /// What `openApp` found (D40).
@@ -244,6 +251,8 @@ actor Session {
     // Mac audio on the phone (D39): the phone's choice and the tap this session runs.
     private var audioMode: AudioMode = .off { didSet { applyAudio() } }
     private var audioApplied: AudioTarget?
+    /// D57: the device's microphone plays into BlackHole.
+    private var micOn = false
 
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
@@ -425,6 +434,11 @@ actor Session {
             audioMode = mode
             log.info("audio mode=\(mode.rawValue, privacy: .public)")
             await sendControl(.audioState(mode: mode))
+        case .mic(let on):
+            let outcome = backend.setMic(on)
+            if case .on = outcome { micOn = true } else { micOn = false }
+            log.info("mic on=\(self.micOn, privacy: .public)")
+            await sendControl(.micState(outcome))
         case .appsList:
             await send(.apps(await backend.listApps()))
         case .appOpen(let id):
@@ -635,6 +649,12 @@ actor Session {
             await sendControl(.error(code: .permissionAudioCapture,
                                      message: "No audio: allow audio capture in System Settings › Privacy & Security"))
         }
+    }
+
+    private func stopMic() {
+        guard micOn else { return }
+        micOn = false
+        _ = backend.setMic(false)
     }
 
     // MARK: Follow ⌘Tab and ⌘F1 (D38)
@@ -848,6 +868,8 @@ actor Session {
 
     private func closePeer() {
         peerConnected = false
+        // D57: the mic's track ends with the peer; the device turns it on again on a new one.
+        stopMic()
         peerTask?.cancel()
         peerTask = nil
         peer?.close()
