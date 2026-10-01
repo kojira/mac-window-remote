@@ -65,11 +65,12 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 
 #dock { position: absolute; left: 0; right: 0; bottom: 0; }
 /* D43: seven controls plus the slots must fit a portrait iPhone, so gaps and paddings are tight. */
-#bottom-bar { display: flex; gap: 6px; align-items: center;
-  height: calc(56px + env(safe-area-inset-bottom));
+/* D53: the bar grows upward with the text field; the buttons stay on its bottom row. */
+#bottom-bar { display: flex; gap: 6px; align-items: flex-end;
+  min-height: calc(56px + env(safe-area-inset-bottom));
   padding: 6px calc(env(safe-area-inset-right) + 8px) calc(env(safe-area-inset-bottom) + 6px) calc(env(safe-area-inset-left) + 8px);
   background: #1c1c1e; }
-#dock.keyboard-up #bottom-bar { height: 56px; padding-bottom: 6px; }
+#dock.keyboard-up #bottom-bar { min-height: 56px; padding-bottom: 6px; }
 #bottom-bar > button { height: 44px; flex: none; }
 #fit { padding: 0 10px; }
 #app-menu, #keyboard { width: 40px; padding: 0; font-size: 20px; }
@@ -87,8 +88,12 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 /* While typing, the text field takes the place of the slots and Fit (D33). */
 #bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window,
 #bottom-bar.typing #audio-mode, #bottom-bar.typing #app-menu { display: none; }
-#text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; padding: 8px 0; border-width: 0; }
-#bottom-bar.typing #text { flex: 1; opacity: 1; padding: 8px 10px; border-width: 1px; }
+/* D53: a one-row textarea that wraps (no horizontal scroll); TextInput sets its height. */
+#text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; height: 44px; padding: 11px 0; border-width: 0;
+  font: inherit; font-size: 16px; line-height: 20px; color: #fff; background: #222; border-style: solid;
+  border-color: #444; border-radius: 8px; resize: none; overflow: hidden; overflow-wrap: anywhere;
+  white-space: pre-wrap; margin: 0; display: block; }
+#bottom-bar.typing #text { flex: 1; opacity: 1; padding: 11px 10px; border-width: 1px; }
 #keyboard.active, #fit-window.active { background: #0a84ff; }
 #fit-window { width: 40px; padding: 0; font-size: 20px; }
 /* D39: 🔇 Off → 🔊 App → 🔊 All; an orange dot while iOS still needs a tap to start the sound. */
