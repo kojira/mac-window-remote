@@ -10,7 +10,7 @@
 
 - **One window, full focus:** pick any Mac window and use it on your iPhone (or a PC browser) as sharp, low-latency video, with a trackpad-style pointer, keyboard, shortcuts, and menus.
 - **Private by design:** it runs only inside your own Tailscale network, with no cloud relay, no accounts, and no pairing codes.
-- **More than a mirror:** the Mac's sound on your phone, plug-in and floating windows included, and files downloaded or uploaded in a tap.
+- **More than a mirror:** the Mac's sound on your phone, plug-in and floating windows included, copy on the Mac and paste on your device, and files downloaded or uploaded in a tap.
 
 ## What you can do with it
 
@@ -32,11 +32,12 @@
 - The viewed app's floating windows (plug-in editors, palettes) and windows it opens while you view it (Settings, dialogs) appear in the video next to the viewed window, and taps reach them.
 - From a **desktop browser** the mouse points directly (the Mac cursor follows it; click, double-click, right-click, drag, wheel; a trackpad pinch or Ctrl + wheel zooms the view) and the physical keyboard types into the window (shortcuts by key position, text in your layout, IME commits). Keys the browser or OS keeps, such as ⌘Tab, ⌘Q, and ⌘W, cannot be captured; use the key panel's ⌘W and ⋯ ⌘Q, or the Mac's own switcher.
 - ⋯ → **⬇︎ Download** browses the whole Mac filesystem (quick places, breadcrumbs, hidden-files toggle, file-name search) and saves the checked items to the iPhone or PC: one file as is, several items or a folder as one zip (up to 2 GB). It only reads files.
+- Text you copy on the Mac while a device is viewing is offered to that device's clipboard: a focused desktop browser copies it at once, and otherwise a banner "📋 Copied on the Mac — tap to copy here" copies it with one tap (text only, up to 1 MiB; items that password managers mark as concealed are never sent).
 - 🔊 in the bottom bar plays the Mac's sound on the iPhone instead of the Mac's speakers: **App** (the viewed window's app) or **All** (the whole Mac); 🔇 **Off** gives the sound back to the Mac. Needs macOS 14.2 or later.
 
 ## Status
 
-**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Clipboard text, image upload, and custom key buttons are later slices. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
+**Revision 2**: open the page → pick a window → view as WebRTC video → zoom → trackpad-style pointer, clicks, scroll, drag → type. Custom key buttons are a later slice. The design is in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Honest constraints
 

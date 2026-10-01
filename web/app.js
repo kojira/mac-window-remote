@@ -10,6 +10,7 @@ import { KeyPanel } from './keypanel.js';
 import { MenuSheet, decodeMenu } from './appmenu.js';
 import { FileSheet, startDownload } from './files.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
+import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import {
   FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages, shortPath,
@@ -561,6 +562,9 @@ function onMessage(msg) {
     case 'download.ready':
       fileSheet.onReady(msg);
       break;
+    case 'clipboard.mac':
+      macClipboard.onMessage(msg);
+      break;
     case 'error':
       if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
       else if (fileSheet.onError(msg)) break;
@@ -943,6 +947,15 @@ const keyPanel = new KeyPanel({
   sendKey: (key, mods) => sendInput({ t: 'key', key, mods }),
   onLayout: (change) => viewer.keepZoom(change),
   onAction: (action) => ({ paste: pasteClipboard, image: pickImage, file: pickFile, download: openFiles }[action]?.()),
+});
+
+// Text copied on the Mac goes to this device's clipboard (D51).
+const macClipboard = new MacClipboard({
+  root: $('mac-clip'),
+  label: $('mac-clip-copy'),
+  close: $('mac-clip-close'),
+  clipboard: navigator.clipboard ?? null,
+  toast,
 });
 
 const menuSheet = new MenuSheet({ root: $('menu-sheet'), onPress: pressMenuItem });

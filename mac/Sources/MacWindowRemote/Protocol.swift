@@ -493,6 +493,8 @@ enum ServerMessage {
     case filesFound(id: String, result: FileSearchResult)
     /// A one-time download URL (D47).
     case downloadReady(id: String, url: String, name: String, size: Int64)
+    /// Text copied on the Mac (D51); nil text means it was over 1 MiB and is not sent.
+    case clipboardMac(seq: Int, text: String?)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
@@ -523,6 +525,9 @@ enum ServerMessage {
         let truncated: Bool; let timedOut: Bool
     }
     private struct Ready: Encodable { let t = "download.ready"; let id: String; let url: String; let name: String; let size: Int64 }
+    private struct ClipboardMac: Encodable {
+        let t = "clipboard.mac"; let seq: Int; let text: String?; let truncated: Bool?
+    }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
     private struct Answer: Encodable { let t = "rtc.answer"; let pc: Int; let sdp: String }
@@ -582,6 +587,8 @@ enum ServerMessage {
                                              truncated: result.truncated, timedOut: result.timedOut))
         case .downloadReady(let id, let url, let name, let size):
             data = try? encoder.encode(Ready(id: id, url: url, name: name, size: size))
+        case .clipboardMac(let seq, let text):
+            data = try? encoder.encode(ClipboardMac(seq: seq, text: text, truncated: text == nil ? true : nil))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

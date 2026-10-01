@@ -108,6 +108,15 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #viewer.panel-open #stage { bottom: calc(56px + var(--panel-h) + env(safe-area-inset-bottom)); }
 #viewer.panel-open #drag-badge, #viewer.panel-open #slot-menu .sheet {
   bottom: calc(env(safe-area-inset-bottom) + 64px + var(--panel-h)); }
+/* D51: text copied on the Mac, offered for a tap; it floats just above the dock (key panel or
+   bottom bar), so it never covers their buttons. */
+#mac-clip { position: absolute; bottom: calc(100% + 8px); left: calc(env(safe-area-inset-left) + 8px);
+  right: calc(env(safe-area-inset-right) + 8px); max-width: 560px; margin: 0 auto; z-index: 3; display: flex;
+  background: rgba(10, 132, 255, 0.95); border-radius: 12px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+#mac-clip button { background: transparent; border-radius: 12px; }
+#mac-clip-copy { flex: 1; min-width: 0; min-height: 44px; text-align: left; font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+#mac-clip-close { flex: none; width: 44px; padding: 0; font-size: 18px; cursor: pointer; }
 #key-panel { display: grid; grid-template-columns: repeat(6, 1fr); grid-auto-rows: var(--key-h); gap: 6px;
   height: var(--panel-h); padding: 6px max(calc(env(safe-area-inset-right) + 8px), calc((100% - 640px) / 2))
   0 max(calc(env(safe-area-inset-left) + 8px), calc((100% - 640px) / 2));
