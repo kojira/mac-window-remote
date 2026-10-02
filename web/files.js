@@ -2,6 +2,8 @@
 // Listing and search go over the socket (`files.list`, `files.search`); the Download button
 // asks for a one-time URL for exactly the selected paths (`download.request`) and then
 // navigates an <a download> to it, so iOS Safari and desktop browsers save the file.
+// D58: ⬆︎ Upload here (and, on a desktop browser, a drop on the list) uploads files into the
+// folder being shown.
 
 /// "1.5 MB"-style sizes, 1024-based like the 2 GB download cap.
 export function formatSize(bytes) {
@@ -157,10 +159,12 @@ export class FileSheet {
   /// root: the backdrop element (hidden when closed). send(msg): a socket message, false if not
   /// connected. download(url, name): start the browser download. storage: where the sort is
   /// remembered (localStorage).
-  constructor({ root, send, download, storage = globalThis.localStorage }) {
+  /// uploader (D58): {busy, upload(files, dest, folderName) → Promise, cancel()}, or null.
+  constructor({ root, send, download, storage = globalThis.localStorage, uploader = null }) {
     this.root = root;
     this.send = send;
     this.download = download;
+    this.uploader = uploader;
     this.storage = storage;
     this.sort = parseSort(storage?.getItem(SORT_STORAGE_KEY));
     this.counter = 0;
@@ -191,6 +195,19 @@ export class FileSheet {
       this.sortButtons[key] = button('files-sort-key', SORT_LABELS[key], () => this.setSort(key));
       this.sortBar.append(this.sortButtons[key]);
     }
+    // D58: upload into the folder shown; while uploading it cancels instead.
+    this.uploadButton = button('files-upload', '⬆︎ Upload here', () => this.uploadPressed());
+    this.filePicker = el('input', 'files-picker');
+    this.filePicker.type = 'file';
+    this.filePicker.multiple = true;
+    this.filePicker.tabIndex = -1;
+    this.filePicker.setAttribute('aria-hidden', 'true');
+    this.filePicker.addEventListener('change', () => {
+      const files = [...(this.filePicker.files ?? [])];
+      this.filePicker.value = '';
+      this.uploadFiles(files);
+    });
+    this.sortBar.append(this.uploadButton, this.filePicker);
 
     const searchRow = el('div', 'files-search');
     this.query = el('input', 'files-query');
@@ -214,6 +231,31 @@ export class FileSheet {
       button('files-pick', '/', () => { this.baseFollows = false; this.base.value = '/'; }));
 
     this.list = el('div', 'menu-list files-list');
+    // D58: a desktop browser can drop files on the list.
+    this.dragDepth = 0;
+    const hasFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files');
+    this.list.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault?.();
+      this.dragDepth += 1;
+      this.setDropHighlight(this.uploadTarget() != null);
+    });
+    this.list.addEventListener('dragover', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault?.();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = this.uploadTarget() ? 'copy' : 'none';
+    });
+    this.list.addEventListener('dragleave', () => {
+      this.dragDepth = Math.max(0, this.dragDepth - 1);
+      if (this.dragDepth === 0) this.setDropHighlight(false);
+    });
+    this.list.addEventListener('drop', (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault?.();
+      this.dragDepth = 0;
+      this.setDropHighlight(false);
+      this.uploadFiles([...(e.dataTransfer.files ?? [])]);
+    });
 
     this.bar = el('div', 'files-bar');
     this.summary = el('span', 'files-summary');
@@ -227,6 +269,50 @@ export class FileSheet {
   }
 
   get isOpen() { return !this.root.hidden; }
+
+  /// D58: the folder files can be uploaded into ({path, name}), or null while loading, after an
+  /// error, while search results are shown, or without an uploader.
+  uploadTarget() {
+    if (!this.uploader || this.found || !this.listing || this.listId) return null;
+    const path = this.listing.path;
+    const place = this.places.find((p) => p.path === path);
+    const name = place?.name ?? (path === '/' ? '/' : path.slice(path.lastIndexOf('/') + 1));
+    return { path, name };
+  }
+
+  /// The button opens the picker inside the tap (iOS needs the gesture), or cancels an upload.
+  uploadPressed() {
+    if (this.uploader?.busy) { this.uploader.cancel(); return; }
+    if (!this.uploadTarget()) return;
+    this.filePicker.value = '';
+    this.filePicker.click();
+  }
+
+  uploadFiles(files) {
+    const target = this.uploadTarget();
+    if (!target || files.length === 0 || this.uploader.busy) return;
+    const done = this.uploader.upload(files, target.path, target.name);
+    this.renderUploadButton();
+    Promise.resolve(done).finally(() => this.renderUploadButton());
+  }
+
+  /// After an upload into `path`: list it again (in the current sort) if it is still shown.
+  refreshAfterUpload(path) {
+    if (this.isOpen && !this.found && this.path === path) this.navigate(path);
+  }
+
+  setDropHighlight(on) {
+    this.list.className = on ? 'menu-list files-list drop' : 'menu-list files-list';
+  }
+
+  renderUploadButton() {
+    const busy = this.uploader?.busy === true;
+    this.uploadButton.hidden = !this.uploader;
+    this.uploadButton.textContent = busy ? 'Cancel upload' : '⬆︎ Upload here';
+    this.uploadButton.disabled = !busy && this.uploadTarget() == null;
+    const target = this.uploadTarget();
+    this.uploadButton.setAttribute('aria-label', busy ? 'Cancel upload' : target ? `Upload files to ${target.name}` : 'Upload here');
+  }
 
   nextId() {
     this.counter += 1;
@@ -392,6 +478,7 @@ export class FileSheet {
       b.textContent = active ? `${SORT_LABELS[key]} ${this.sort.desc ? '↓' : '↑'}` : SORT_LABELS[key];
       b.setAttribute('aria-pressed', String(active));
     }
+    this.renderUploadButton();
     this.hiddenToggle.className = this.showHidden ? 'files-hidden active' : 'files-hidden';
     this.hiddenToggle.setAttribute('aria-pressed', String(this.showHidden));
     this.list.textContent = '';

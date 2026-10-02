@@ -202,6 +202,10 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .files-sort { flex: none; display: flex; gap: 6px; align-items: center; padding: 6px 8px 0; font-size: 13px; color: #aaa; }
 .files-sort-key { flex: none; padding: 5px 10px; font-size: 13px; border-radius: 14px; }
 .files-sort-key.active { background: #0a84ff; color: #fff; }
+.files-upload { flex: none; margin-left: auto; padding: 5px 10px; font-size: 13px; border-radius: 14px; background: #0a84ff; color: #fff; }
+.files-upload:disabled { opacity: 0.4; }
+.files-picker { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: 0; top: 0; }
+.files-list.drop { outline: 2px dashed #0a84ff; outline-offset: -4px; background: #0a1a2c; }
 .files-search, .files-base { flex: none; display: flex; gap: 6px; align-items: center; padding: 6px 8px 0; }
 .files-base { padding-bottom: 6px; border-bottom: 1px solid #2c2c2e; font-size: 13px; color: #aaa; }
 .files-query, .files-base-input { flex: 1; min-width: 0; padding: 7px 8px; font-size: 16px; border-radius: 8px;
