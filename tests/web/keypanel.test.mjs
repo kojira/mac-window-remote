@@ -127,10 +127,10 @@ test('space and ⏎ send Space and Enter with the active modifiers, then repeat 
   assert.deepEqual(sent, [['Enter', ['shift']], ['Space', ['cmd']], ['Space', ['cmd']], ['Space', ['cmd']]]);
 });
 
-test('⋯ opens a menu with 📋 Paste, 📋 Copy to Mac, 🖼 Image, 📎 File, ⬇︎ Download, ⌘Q; ⋯ again closes it', () => {
+test('⋯ opens a menu with 📋 Paste, 📋 Copy to Mac, 🖼 Image, 📎 File, ⬇︎⬆︎ Files, ⌘Q; ⋯ again closes it', () => {
   const { kp, key, tap } = setup();
   tap(key('⋯'));
-  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '📋 Copy to Mac', '🖼 Image', '📎 File', '⬇︎ Download', '⌘Q']);
+  assert.deepEqual(kp.menu.children.map((b) => b.label), ['📋 Paste', '📋 Copy to Mac', '🖼 Image', '📎 File', '⬇︎⬆︎ Files', '⌘Q']);
   assert.ok(key('⋯').classList.contains('active'));
   tap(key('⋯'));
   assert.equal(kp.isMenuOpen(), false);
@@ -174,10 +174,10 @@ test('📎 File runs its action (the file picker) on the item touchend, not touc
   assert.equal(kp.isMenuOpen(), false);
 });
 
-test('⬇︎ Download runs the download action from the menu (D47)', () => {
+test('⬇︎⬆︎ Files runs the download action from the menu (D47)', () => {
   const { kp, key, item, tap, actions } = setup();
   tap(key('⋯'));
-  tap(item('⬇︎ Download'));
+  tap(item('⬇︎⬆︎ Files'));
   assert.deepEqual(actions, ['download']);
   assert.equal(kp.isMenuOpen(), false);
 });

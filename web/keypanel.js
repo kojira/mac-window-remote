@@ -1,7 +1,7 @@
 // The key panel above the bottom bar (DESIGN.md D34): special keys, one-shot modifiers,
 // an fn layer with F1–F12, and ⌫ (D54); opening the panel shows the text field. The normal layer's
 // third row is one-tap ⌘F1 and ⌘W (D37, D48), space, ⏎, and ⋯, a menu with 📋 Paste, 📋 Copy to Mac (D52), 🖼 Image
-// (D36), 📎 File (D42), ⬇︎ Download (D47), and ⌘Q (D41).
+// (D36), 📎 File (D42), ⬇︎⬆︎ Files (D47, D58), and ⌘Q (D41).
 
 import { mergeMods } from './modifiers.js';
 
@@ -26,7 +26,7 @@ const NORMAL = [
 const MORE_MENU = [
   { label: '📋 Paste', action: 'paste' }, { label: '📋 Copy to Mac', action: 'copy' },
   { label: '🖼 Image', action: 'image' },
-  { label: '📎 File', action: 'file' }, { label: '⬇︎ Download', action: 'download' },
+  { label: '📎 File', action: 'file' }, { label: '⬇︎⬆︎ Files', action: 'download' },
   { label: '⌘Q', key: 'q', mods: ['cmd'], combo: true },
 ];
 const FN = [

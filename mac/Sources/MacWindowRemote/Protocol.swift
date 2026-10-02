@@ -50,6 +50,10 @@ enum ErrorCode: String, Codable {
     case notADirectory = "not_a_directory"
     /// D47: permission or privacy (TCC) refusal.
     case noAccess = "no_access"
+    /// D58: the destination folder cannot be written.
+    case notWritable = "not_writable"
+    /// D58: the Mac's disk (or quota) is full.
+    case diskFull = "disk_full"
     case `internal` = "internal"
 }
 
@@ -106,6 +110,8 @@ enum ClientMessage: Equatable {
     case filesSearch(id: String, base: String, query: String, hidden: Bool)
     /// A one-time download URL for exactly these absolute paths (D47).
     case downloadRequest(id: String, paths: [String])
+    /// D58: stop the `files.put` upload `id` and delete its part file.
+    case filesPutCancel(id: String)
 }
 
 /// A desktop mouse button (D45).
@@ -335,6 +341,8 @@ extension ClientMessage {
                 throw ProtocolError.invalidValue("paths")
             }
             return .downloadRequest(id: try requestId(), paths: paths)
+        case "files.put.cancel":
+            return .filesPutCancel(id: try requestId())
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -350,7 +358,7 @@ extension ClientMessage {
     var channel: MessageChannel {
         switch self {
         case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
-             .filesList, .filesSearch, .downloadRequest:
+             .filesList, .filesSearch, .downloadRequest, .filesPutCancel:
             return .socket
         case .move, .scroll, .point: return .motion
         case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio, .mic: return .control
@@ -386,6 +394,7 @@ extension ClientMessage {
         case .filesList: return "files.list"
         case .filesSearch: return "files.search"
         case .downloadRequest: return "download.request"
+        case .filesPutCancel: return "files.put.cancel"
         }
     }
 }
@@ -404,12 +413,16 @@ enum BinaryClientMessage: Equatable {
     /// One chunk of any file (D42); `name` is the phone's file name on the chunk at offset 0 and
     /// empty on the others.
     case fileChunk(id: String, size: Int, offset: Int, bytes: Data, name: String)
+    /// D58: one chunk of a file uploaded into the folder `dest`; `name` and `dest` are set on
+    /// the chunk at offset 0 and empty on the others.
+    case filesPut(id: String, size: Int, offset: Int, bytes: Data, name: String, dest: String)
 
     /// Clipboard text is at most 1 MiB of UTF-8 (D11).
     static let maxClipboardBytes = 1 << 20
     /// The phone sends image chunks of this size; the last one may be shorter.
     static let maxChunkBytes = 256 << 10
-    static let maxHeaderBytes = 1024
+    /// Room for a `files.put` header with a long folder path (D58) and file name.
+    static let maxHeaderBytes = 8192
 
     private struct Header: Decodable {
         let t: String
@@ -417,6 +430,7 @@ enum BinaryClientMessage: Equatable {
         let size: Int?
         let offset: Int?
         let name: String?
+        let dest: String?
     }
 
     /// Decodes the framing, the header, and its values. A clipboard payload over 1 MiB throws
@@ -441,13 +455,20 @@ enum BinaryClientMessage: Equatable {
                 throw ProtocolError.invalidValue("text")
             }
             return h.t == "clipboard.paste" ? .clipboardPaste(id: id, text: text) : .clipboardSet(id: id, text: text)
-        case "image.chunk", "file.chunk":
+        case "image.chunk", "file.chunk", "files.put":
             guard let size = h.size, size > 0 else { throw ProtocolError.invalidValue("size") }
             guard let offset = h.offset, offset >= 0 else { throw ProtocolError.invalidValue("offset") }
             guard !payload.isEmpty, payload.count <= maxChunkBytes, offset + payload.count <= size else {
                 throw ProtocolError.invalidValue("chunk")
             }
             if h.t == "image.chunk" { return .imageChunk(id: id, size: size, offset: offset, bytes: payload) }
+            if h.t == "files.put" {
+                // A missing or bad `dest` fails at the destination check, so the rest of the
+                // upload's chunks are ignored there.
+                let first = offset == 0
+                return .filesPut(id: id, size: size, offset: offset, bytes: payload,
+                                 name: first ? h.name ?? "" : "", dest: first ? h.dest ?? "" : "")
+            }
             return .fileChunk(id: id, size: size, offset: offset, bytes: payload, name: offset == 0 ? h.name ?? "" : "")
         default:
             throw ProtocolError.unknownType(h.t)

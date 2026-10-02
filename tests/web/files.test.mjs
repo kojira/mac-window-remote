@@ -49,7 +49,7 @@ function fakeStorage(initial = {}) {
   return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => { data[k] = String(v); } };
 }
 
-function setup(storage = fakeStorage()) {
+function setup(storage = fakeStorage(), { uploader = null } = {}) {
   const root = new FakeElement('div');
   root.hidden = true;
   const sent = [];
@@ -60,6 +60,7 @@ function setup(storage = fakeStorage()) {
     send: (m) => { if (connected) sent.push(m); return connected; },
     download: (url, name) => downloads.push([url, name]),
     storage,
+    uploader,
   });
   const last = () => sent[sent.length - 1];
   const rows = () => sheet.list.children.filter((c) => c.className.startsWith('files-row'));
@@ -305,4 +306,124 @@ test('sort: a capped listing is asked for again in the new order; search results
   sheet.sortButtons.name.dispatch('click');
   assert.deepEqual(found(), ['A.txt', 'b.txt', 'c.txt']);
   assert.equal(sent.length, searches, 'search results are re-sorted on the device');
+});
+
+// D58: ⬆︎ Upload here.
+function fakeUploader() {
+  const u = {
+    busy: false, calls: [], cancels: 0, finish: null,
+    upload(files, dest, name) {
+      u.calls.push({ files, dest, name });
+      u.busy = true;
+      return new Promise((resolve) => { u.finish = () => { u.busy = false; resolve(); }; });
+    },
+    cancel() { u.cancels += 1; },
+  };
+  return u;
+}
+
+const dragEvent = (files, types = ['Files']) => {
+  const e = { dataTransfer: { types, files, dropEffect: '' }, prevented: false };
+  e.preventDefault = () => { e.prevented = true; };
+  return e;
+};
+
+test('Upload here: enabled for a listed folder, disabled while loading, after an error, and on search results', () => {
+  const uploader = fakeUploader();
+  const { sheet, last, reply } = setup(fakeStorage(), { uploader });
+  sheet.open();
+  assert.equal(sheet.uploadButton.disabled, true, 'loading');
+  reply();
+  assert.equal(sheet.uploadButton.disabled, false);
+  assert.equal(sheet.uploadButton.label, '⬆︎ Upload here');
+  assert.equal(sheet.uploadButton.attrs['aria-label'], 'Upload files to Home');
+  // The picker takes several files and has no type filter.
+  assert.equal(sheet.filePicker.type, 'file');
+  assert.equal(sheet.filePicker.multiple, true);
+  assert.equal(sheet.filePicker.attrs.accept, undefined);
+  sheet.query.value = 'a';
+  sheet.search();
+  assert.equal(sheet.uploadButton.disabled, true, 'search results');
+  sheet.query.value = '';
+  sheet.clearSearch();
+  assert.equal(sheet.uploadButton.disabled, false);
+  sheet.navigate('/');
+  sheet.onFiles({ t: 'files', id: last().id, path: '/', entries: [], places: PLACES });
+  assert.equal(sheet.uploadButton.disabled, true, 'the Computer root');
+  sheet.navigate('/nope');
+  sheet.onError({ t: 'error', id: last().id, code: 'not_found' });
+  assert.equal(sheet.uploadButton.disabled, true, 'no folder after an error');
+  // Without an uploader the button is hidden.
+  const plain = setup();
+  plain.sheet.open();
+  plain.reply();
+  assert.equal(plain.sheet.uploadButton.hidden, true);
+});
+
+test('Upload here: the tap opens the picker; picked files go to the folder shown; the button cancels while busy', async () => {
+  const uploader = fakeUploader();
+  const { sheet, reply } = setup(fakeStorage(), { uploader });
+  sheet.open();
+  reply();
+  let clicked = 0;
+  sheet.filePicker.click = () => { clicked += 1; };
+  sheet.uploadButton.dispatch('click');
+  assert.equal(clicked, 1);
+  const files = [{ name: 'a.txt', size: 1 }, { name: 'b.txt', size: 2 }];
+  sheet.filePicker.files = files;
+  sheet.filePicker.dispatch('change');
+  assert.deepEqual(uploader.calls, [{ files, dest: HOME, name: 'Home' }]);
+  assert.equal(sheet.uploadButton.label, 'Cancel upload');
+  assert.equal(sheet.uploadButton.disabled, false);
+  sheet.uploadButton.dispatch('click');
+  assert.equal(uploader.cancels, 1);
+  assert.equal(clicked, 1, 'no picker while busy');
+  uploader.finish();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(sheet.uploadButton.label, '⬆︎ Upload here');
+});
+
+test('Upload here: dropping files on the list uploads them; the list is highlighted while dragging', () => {
+  const uploader = fakeUploader();
+  const { sheet, reply, last } = setup(fakeStorage(), { uploader });
+  sheet.open();
+  reply();
+  const files = [{ name: 'x.bin', size: 3 }];
+  const enter = dragEvent(files);
+  sheet.list.dispatch('dragenter', enter);
+  assert.ok(enter.prevented);
+  assert.ok(sheet.list.className.includes('drop'));
+  const over = dragEvent(files);
+  sheet.list.dispatch('dragover', over);
+  assert.ok(over.prevented);
+  assert.equal(over.dataTransfer.dropEffect, 'copy');
+  sheet.list.dispatch('drop', dragEvent(files));
+  assert.ok(!sheet.list.className.includes('drop'));
+  assert.deepEqual(uploader.calls, [{ files, dest: HOME, name: 'Home' }]);
+  // Text being dragged is not a drop target; a drop on search results does nothing.
+  const text = dragEvent([], ['text/plain']);
+  sheet.list.dispatch('dragover', text);
+  assert.ok(!text.prevented);
+  uploader.busy = false;
+  sheet.query.value = 'a';
+  sheet.search();
+  sheet.onFound({ t: 'files.found', id: last().id, base: HOME, entries: [] });
+  sheet.list.dispatch('drop', dragEvent(files));
+  assert.equal(uploader.calls.length, 1);
+});
+
+test('Upload here: after the upload, the folder is listed again in the current sort', () => {
+  const uploader = fakeUploader();
+  const { sheet, sent, reply } = setup(fakeStorage(), { uploader });
+  sheet.open();
+  reply();
+  const before = sent.length;
+  sheet.refreshAfterUpload(HOME);
+  assert.equal(sent.length, before + 1);
+  assert.deepEqual(sent.at(-1), { t: 'files.list', id: sent.at(-1).id, path: HOME, hidden: false, sort: 'mtime', desc: true });
+  // Not when another folder is shown or the sheet is closed.
+  sheet.refreshAfterUpload('/elsewhere');
+  sheet.close();
+  sheet.refreshAfterUpload(HOME);
+  assert.equal(sent.length, before + 1);
 });

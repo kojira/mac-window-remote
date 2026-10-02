@@ -17,8 +17,8 @@ import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import { MicControl, micAriaLabel } from './mic.js';
 import {
-  CLIPBOARD_MODES, FILE_MAX_BYTES, IMAGE_MAX_BYTES, clipboardMessage, fileChunkMessages, imageChunkMessages,
-  readClipboardForMac, shortPath,
+  CLIPBOARD_MODES, FILE_MAX_BYTES, FILE_MAX_LABEL, FolderUploader, IMAGE_MAX_BYTES, UPLOAD_BUFFER_BYTES, clipboardMessage, fileChunkMessages,
+  imageChunkMessages, readClipboardForMac, sendChunks, shortPath,
 } from './upload.js';
 
 /// The viewed window {id, app, title} (D33: slots store the app and title too), or a display
@@ -505,6 +505,7 @@ function connect() {
 /// The socket closed: no reply will come for requests sent on it. An image that is still
 /// waiting for the connection (after the camera hid the page) keeps waiting.
 function abandonUploads() {
+  folderUploader.abandon();
   if (imageUpload?.sending) { imageUpload.cancelled = true; imageUpload = null; }
   if (pendingUploads.size > 0) toast('Upload interrupted — try again');
   pendingUploads.clear();
@@ -610,7 +611,7 @@ function onMessage(msg) {
       onViewSwitched(msg);
       break;
     case 'result':
-      onUploadReply(msg);
+      if (!folderUploader.onReply(msg)) onUploadReply(msg);
       break;
     case 'menu':
       onMenu(msg);
@@ -631,7 +632,8 @@ function onMessage(msg) {
       macClipboard.onMessage(msg);
       break;
     case 'error':
-      if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
+      if (folderUploader.onReply(msg)) break;
+      else if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
       else if (fileSheet.onError(msg)) break;
       else if (onMenuError(msg)) break;
       else if (!onAppOpenError(msg)) onError(msg);
@@ -779,13 +781,8 @@ const pendingUploads = new Map();
 let uploadCounter = 0;
 /// The image upload in progress, or null; a newer pick cancels it.
 let imageUpload = null;
-/// While sending an image, at most this much waits in the socket's send buffer, so the
-/// socket's pong answers the Mac's 10 s ping in time even on a slow link.
-const UPLOAD_BUFFER_BYTES = 512 << 10;
 /// Taking a photo can hide the page and reconnect; the picked image waits this long for it.
 const UPLOAD_CONNECT_WAIT_MS = 10000;
-const PROGRESS_POLL_MS = 50;
-
 function nextUploadId(prefix) {
   uploadCounter += 1;
   return `${prefix}${uploadCounter}`;
@@ -876,17 +873,35 @@ $('any-file').addEventListener('change', () => {
   if (file) uploadImage(file, { asFile: true });
 });
 
+/// The open socket as an upload transport: send(bytes), buffered() (null once it changed or
+/// closed), and sendJson(msg).
+function socketTransport() {
+  const ws = socket;
+  const open = () => ws === socket && ws?.readyState === WebSocket.OPEN;
+  return {
+    send: (bytes) => open() && sendBinary(bytes),
+    buffered: () => (open() ? ws.bufferedAmount : null),
+    sendJson: (msg) => open() && send(msg),
+  };
+}
+
 /// Sends an image (D36) or, with asFile, any file under its own name (D42). Both share the
-/// chunked upload, the progress toast, and "a newer pick cancels the older one".
+/// chunked upload, the progress toast, and "a newer pick cancels the older one". A file is
+/// read one chunk at a time, so up to 2 GB never sits in memory.
 async function uploadImage(file, { asFile = false } = {}) {
   const what = asFile ? 'File' : 'Image';
-  if (file.size > (asFile ? FILE_MAX_BYTES : IMAGE_MAX_BYTES)) { toast(`${what} too large (max ${asFile ? 100 : 25} MiB)`); return; }
+  if (file.size > (asFile ? FILE_MAX_BYTES : IMAGE_MAX_BYTES)) {
+    toast(`${what} too large (max ${asFile ? FILE_MAX_LABEL : '25 MiB'})`);
+    return;
+  }
   if (file.size === 0) { toast(`The ${what.toLowerCase()} is empty`); return; }
   if (imageUpload) imageUpload.cancelled = true;
   const upload = { cancelled: false };
   imageUpload = upload;
-  let bytes;
-  try { bytes = new Uint8Array(await file.arrayBuffer()); } catch { toast(`Could not read the ${what.toLowerCase()}`); return; }
+  let source = file;
+  if (!asFile) {
+    try { source = new Uint8Array(await file.arrayBuffer()); } catch { toast(`Could not read the ${what.toLowerCase()}`); return; }
+  }
   // The page may have been hidden (camera) and be reconnecting: wait until viewing resumes.
   // `view.start` goes out when the video link is ready, and the Mac handles it before chunks.
   const deadline = performance.now() + UPLOAD_CONNECT_WAIT_MS;
@@ -894,33 +909,34 @@ async function uploadImage(file, { asFile = false } = {}) {
     await new Promise((r) => setTimeout(r, 200));
   }
   if (upload.cancelled) return;
-  const ws = socket;
   if (!canUpload()) { imageUpload = null; return; }
   const id = nextUploadId(asFile ? 'f' : 'i');
   upload.sending = true;
   pendingUploads.set(id, { kind: asFile ? 'file' : 'image' });
-  const showProgress = bytes.length > 2 * UPLOAD_BUFFER_BYTES;
+  const size = file.size;
+  const showProgress = size > 2 * UPLOAD_BUFFER_BYTES;
   const progress = (sent) => {
-    if (showProgress) toast(`Uploading… ${Math.max(0, Math.floor((sent / bytes.length) * 100))}%`, { sticky: true });
+    if (showProgress) toast(`Uploading… ${Math.max(0, Math.min(100, Math.floor((sent / size) * 100)))}%`, { sticky: true });
   };
   progress(0);
-  for (const chunk of (asFile ? fileChunkMessages(id, file.name, bytes) : imageChunkMessages(id, bytes))) {
-    // Keep the send buffer small, so input and pings are never stuck behind the image.
-    while (ws === socket && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > UPLOAD_BUFFER_BYTES && !upload.cancelled) {
-      progress(chunk.offset - ws.bufferedAmount);
-      await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
-    }
-    if (upload.cancelled) { pendingUploads.delete(id); return; }
-    if (ws !== socket || !sendBinary(chunk.data)) {
-      pendingUploads.delete(id);
-      imageUpload = null;
-      toast('Upload interrupted — try again');
-      return;
-    }
+  let outcome;
+  try {
+    outcome = await sendChunks({
+      chunks: asFile ? fileChunkMessages(id, file.name, source) : imageChunkMessages(id, source),
+      size,
+      transport: socketTransport(),
+      isCancelled: () => upload.cancelled,
+      onProgress: progress,
+    });
+  } catch {
+    outcome = 'unreadable';
   }
-  while (ws === socket && ws.readyState === WebSocket.OPEN && ws.bufferedAmount > 0 && !upload.cancelled) {
-    progress(bytes.length - ws.bufferedAmount);
-    await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
+  if (outcome === 'cancelled') { pendingUploads.delete(id); return; }
+  if (outcome !== 'sent') {
+    pendingUploads.delete(id);
+    if (imageUpload === upload) imageUpload = null;
+    toast(outcome === 'unreadable' ? `Could not read the ${what.toLowerCase()}` : 'Upload interrupted — try again');
+    return;
   }
   if (showProgress && !upload.cancelled && pendingUploads.has(id)) toast('Pasting…', { sticky: true });
   if (imageUpload === upload) imageUpload = null;
@@ -938,7 +954,7 @@ function onUploadReply(msg) {
   }
   switch (msg.code) {
     case 'too_large':
-      toast({ image: 'Image too large (max 25 MiB)', file: 'File too large (max 100 MiB)' }[pending.kind] ?? 'Text too large (max 1 MiB)');
+      toast({ image: 'Image too large (max 25 MiB)', file: `File too large (max ${FILE_MAX_LABEL})` }[pending.kind] ?? 'Text too large (max 1 MiB)');
       break;
     case 'unsupported_type':
       toast('Not a supported image (PNG, JPEG, HEIC, GIF, WebP)');
@@ -1034,8 +1050,15 @@ const macClipboard = new MacClipboard({
 
 const menuSheet = new MenuSheet({ root: $('menu-sheet'), onPress: pressMenuItem });
 
-// ⬇︎ Download (D47): browse and search the Mac's files, then save the selection.
-const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload });
+// ⬇︎ Download (D47): browse and search the Mac's files, then save the selection. D58: ⬆︎ Upload
+// here sends files into the folder shown, one after another, then lists it again.
+const folderUploader = new FolderUploader({
+  connect: socketTransport,
+  status: toast,
+  nextId: () => nextUploadId('p'),
+  onDone: (dest) => fileSheet.refreshAfterUpload(dest),
+});
+const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload, uploader: folderUploader });
 
 function openFiles() {
   keyPanel.close();
