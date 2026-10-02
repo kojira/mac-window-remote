@@ -271,12 +271,13 @@ export class FileSheet {
   get isOpen() { return !this.root.hidden; }
 
   /// D58: the folder files can be uploaded into ({path, name}), or null while loading, after an
-  /// error, while search results are shown, or without an uploader.
+  /// error, on `/` (the Computer root), while search results are shown, or without an uploader.
   uploadTarget() {
     if (!this.uploader || this.found || !this.listing || this.listId) return null;
     const path = this.listing.path;
+    if (path === '/') return null;
     const place = this.places.find((p) => p.path === path);
-    const name = place?.name ?? (path === '/' ? '/' : path.slice(path.lastIndexOf('/') + 1));
+    const name = place?.name ?? path.slice(path.lastIndexOf('/') + 1);
     return { path, name };
   }
 

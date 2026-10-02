@@ -347,6 +347,9 @@ test('Upload here: enabled for a listed folder, disabled while loading, after an
   sheet.query.value = '';
   sheet.clearSearch();
   assert.equal(sheet.uploadButton.disabled, false);
+  sheet.navigate('/');
+  sheet.onFiles({ t: 'files', id: last().id, path: '/', entries: [], places: PLACES });
+  assert.equal(sheet.uploadButton.disabled, true, 'the Computer root');
   sheet.navigate('/nope');
   sheet.onError({ t: 'error', id: last().id, code: 'not_found' });
   assert.equal(sheet.uploadButton.disabled, true, 'no folder after an error');
