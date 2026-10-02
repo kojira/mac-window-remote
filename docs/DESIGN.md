@@ -2041,6 +2041,7 @@ On a real iPhone against the real Mac:
 ## 22. Attach any file and paste its path (user decision; amends D36, D41)
 
 ### D42. 📎 File in the ⋯ menu
+> *Amended by §36 D58:* the limit is **2 GB** (2 × 1024³ bytes; "File too large (max 2 GB)"). The page reads the file one 256 KiB chunk at a time and the Mac streams the chunks into a hidden `.mwr-upload-<UUID>.part` in the `<UUID>` folder, renamed to `<name>` when complete, so neither side holds the file in memory. A failed or interrupted upload leaves no part file.
 - **Why (user request):** attach any file, not only images, and paste its Mac path.
 - **Entry.** The ⋯ menu (D41) is 📋 Paste, 🖼 Image, **📎 File**, ⌘Q. 📎 File opens an
   `<input type="file">` **without** an `accept` filter (iOS offers Files, Photo Library, and
@@ -2470,3 +2471,31 @@ Setup: BlackHole installed on the Mac; a meeting test page (or any app with a mi
 7. *PC browser (Chrome or Safari):* the same with a click; the browser asks for the microphone, its indicator shows while on and goes away when off.
 8. Viewing, input, and 🔊 (D39) work as before with 🎤 off; the Mac never asks for its own microphone.
 9. *Unit:* `MicPlayoutTests` (BlackHole selection from fake device lists: prefix, 2ch preferred, none → no-device; on/off with a fake sink; 480-frame pulls into a fake sink; silence without WebRTC; `mic` / `mic.state`), `RTCAudioAnswerTests` (a sendrecv audio offer is answered sendrecv), `tests/web/mic.test.mjs` (toggle states, denied toast, no-device toast, re-attach on a new connection, hidden while typing).
+
+## 36. Upload files into a Mac folder (user decision D58, Issue #52; amends D42, D47)
+
+### D58. ⬆︎ Upload here in the ⬇︎ Download sheet
+
+- **Entry.** The ⬇︎ Download sheet (D47) has **⬆︎ Upload here** at the right of the Sort row (touch and mouse). It uploads into the folder being shown. It is disabled while a folder is loading, after a listing error ("No access", "Not found"), on `/` (the Computer quick place, the root), and while search results are shown. The tap opens `<input type="file" multiple>` with no `accept` filter (iOS offers Files, Photo Library, and Take Photo). On a desktop browser, files dropped onto the list upload into that folder too; the list is outlined while files are dragged over it. No path is pasted.
+- **Sending.** Files go one after another, each over the D36 chunked transport on the authenticated `/ws` (256 KiB chunks, at most 512 KiB in the send buffer), read from the `File` one chunk at a time. A sticky toast shows "Uploading 2/3 · name · 45%". While uploading, the button reads **Cancel upload**; Cancel stops after the current chunk and sends `files.put.cancel`. When the batch ends the toast says "Uploaded N files to <folder name>" (or "Uploaded k of N files to … · <first problem>", "Upload cancelled — …", "Upload interrupted — …"), and if any file arrived the folder is listed again in the current sort (D55), so the new files appear. A file over 2 GB or empty is skipped on the device with its reason. The socket closing ends the batch as interrupted; it is not resumed.
+- **Wire.** A new binary kind (a separate type keeps the D42 paste path unchanged): header `{"t":"files.put","id":"p1","size":n,"offset":0,"name":"photo.jpg","dest":"/abs/folder"}` + ≤ 256 KiB; later chunks omit `name` and `dest`. `size` is the declared total. The binary header limit is raised to 8 KiB for long folder paths. `{"t":"files.put.cancel","id":"p1"}` (text). Replies: `{"t":"result","id","ok":true,"path":"<final path>"}` or `{"t":"error","id","code":"not_found|not_a_directory|not_writable|too_large|disk_full|bad_request|internal","message"}`. No viewed window is needed.
+- **Mac.**
+  - `dest` must be absolute; it is resolved with `realpath` (symlinks followed) and must be an existing directory: otherwise `not_found` / `not_a_directory`.
+  - The declared `size` over 2 GB is `too_large` before anything is created; the bytes written are capped too.
+  - The chunks stream straight into a hidden `.mwr-upload-<UUID>.part` created in the destination (`O_CREAT|O_EXCL|O_NOFOLLOW`, mode 0644). Writability is what this open says: `EACCES`/`EPERM`/`EROFS` → `not_writable`, `ENOSPC`/`EDQUOT` → `disk_full`, `ENOENT` → `not_found`.
+  - When `size` bytes have arrived, the part is renamed with `renamex_np(RENAME_EXCL)` to the sanitized name (D42 rules: last path component, no control characters, no leading dots, ≤ 200 UTF-8 bytes, else `file`), or on a collision Finder-style "name 2.ext", "name 3.ext", …. An existing file is never overwritten.
+  - An error, a gap or another id (`bad_request`), a cancel, a newer `files.put`, the socket closing, or the session ending deletes the part file. After a failure or a cancel, the rest of that upload's chunks are ignored.
+  - Logs carry byte counts and codes, never names or paths.
+- **📎 File (D42)** shares the streaming writer (into its `<UUID>` folder) and the 2 GB limit. 🖼 Image (25 MiB, sniffed, in memory) is unchanged.
+- **Limits.** One upload at a time; no resume after a disconnect. The page needs to stay open (iOS closes the socket in the background, D15). A privacy-protected folder (TCC) the app has no access to is `not_writable`.
+- **Source changes:** `Uploads.swift` (`FileUploadReceiver`, `PartFile`, `UploadDestination`, `UploadFailure`, `UploadStore.makeFileFolder`; the in-memory file path is gone), `Protocol.swift` (`filesPut`, `filesPutCancel`, `not_writable`, `disk_full`, 8 KiB header), `Session.swift`; `web/upload.js` (`filesPutMessages`, Blob chunks, `sendChunks`, `FolderUploader`, 2 GB), `web/files.js` (button, picker, drop, refresh), `web/app.js`, `web/style.css`.
+
+### D58 acceptance criteria
+1. *iPhone (Safari or Home Screen):* ⋯ → ⬇︎ Download → open a folder (e.g. Downloads) → ⬆︎ Upload here → pick three photos: the toast counts "Uploading 1/3 · … · n%" to 3/3, then "Uploaded 3 files to Downloads"; the list refreshes with the three files on top (Modified ↓). The bytes match the originals.
+2. Uploading a file whose name already exists in the folder adds "name 2.ext" and leaves the original untouched; a third one gets "name 3.ext".
+3. On Computer (`/`), while a folder loads, after "No access", and on search results, ⬆︎ Upload here is disabled.
+4. *PC browser:* the button with a mouse picks several files the same way. Dragging files from the desktop over the list outlines it; dropping uploads them into the folder shown.
+5. Cancel during a large upload stops it; the folder has no `.mwr-upload-*.part` file and no partial file. Closing the tab or locking the phone mid-upload leaves no part file either.
+6. A read-only folder shows "… This folder is not writable"; a file over 2 GB is skipped with "Too large (max 2 GB)".
+7. 📎 File accepts a file up to 2 GB (over: "File too large (max 2 GB)") and still pastes its `/var/folders/…/uploads/<UUID>/<name>` path; 🖼 Image is unchanged.
+8. *Unit:* `FileUploadTests` (Finder collision names, the sanitizer, destination checks: missing, not a folder, symlink to a folder, file link; streaming into a hidden part and atomic rename without overwrite; part removed on a gap, cancel, newer upload, abort; the size cap up front and while writing with a small injected cap; read-only folder; errno mapping; `files.put`/`files.put.cancel` decoding), `SessionFilesPutTests` through the real server (save with collision, injected cap, missing folder, part removed on disconnect and on cancel), `UploadsTests` (📎 streamed into its `<UUID>` folder); `tests/web/files.test.mjs` (button states, picker, drop and highlight, refresh in the current sort) and `tests/web/upload.test.mjs` (2 GB limit, Blob chunks, the send-buffer cap, sequential files with progress, errors, cancel, interrupt).
