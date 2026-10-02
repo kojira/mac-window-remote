@@ -116,6 +116,8 @@ actor SessionHub {
     let backend: any SessionBackend
     let owner: OwnerLogin
     let uploads: UploadStore
+    /// The largest file a session accepts (D42, D58); tests use a small one.
+    let maxFileBytes: Int
     /// The Mac pasteboard whose new text goes to the device (D51) and that Copy to Mac writes
     /// (D52); nil sends nothing and fails Copy to Mac.
     let pasteboard: (any MacPasteboard)?
@@ -124,9 +126,10 @@ actor SessionHub {
     private let onStatus: @Sendable (ConnectionStatus) -> Void
 
     init(owner: OwnerLogin, backend: any SessionBackend, uploads: UploadStore = .standard,
-         pasteboard: (any MacPasteboard)? = nil,
+         pasteboard: (any MacPasteboard)? = nil, maxFileBytes: Int = FileUploadReceiver.maxFileBytes,
          onStatus: @escaping @Sendable (ConnectionStatus) -> Void = { _ in }) {
         self.owner = owner
+        self.maxFileBytes = maxFileBytes
         self.backend = backend
         self.uploads = uploads
         self.pasteboard = pasteboard
@@ -184,7 +187,8 @@ actor SessionHub {
             return
         }
         var iterator = inbound.messages(maxSize: Server.maxMessageSize).makeAsyncIterator()
-        let session = Session(hub: self, backend: backend, outbound: outbound, uploads: uploads, pasteboard: pasteboard)
+        let session = Session(hub: self, backend: backend, outbound: outbound, uploads: uploads, pasteboard: pasteboard,
+                              maxFileBytes: maxFileBytes)
         await activate(session)
         log.info("session started")
         await session.send(.hello(permissions: backend.permissions()))
@@ -257,15 +261,19 @@ actor Session {
     // Input: Mac-owned cursor, coalesced motion, ordered discrete inputs (D24, D25).
     private let input: InputPipeline
 
-    // Image and file uploads (D36, D42).
+    // Image and file uploads (D36, D42), and files uploaded into a Mac folder (D58).
     private let uploads: UploadStore
     private var images = ImageUploadAssembler()
+    private var pastedFiles: FileUploadReceiver
+    private var folderFiles: FileUploadReceiver
 
     static let captureRetryInterval: Duration = .seconds(5)
     static let pingInterval: Duration = .seconds(10)
 
     init(hub: SessionHub, backend: any SessionBackend, outbound: WebSocketOutboundWriter, uploads: UploadStore,
-         pasteboard: (any MacPasteboard)? = nil) {
+         pasteboard: (any MacPasteboard)? = nil, maxFileBytes: Int = FileUploadReceiver.maxFileBytes) {
+        pastedFiles = FileUploadReceiver(maxBytes: maxFileBytes)
+        folderFiles = FileUploadReceiver(maxBytes: maxFileBytes)
         self.hub = hub
         self.backend = backend
         self.outbound = outbound
@@ -453,6 +461,8 @@ actor Session {
             searchFiles(id: id, base: base, query: query, hidden: hidden)
         case .downloadRequest(let id, let paths):
             await prepareDownload(id: id, paths: paths)
+        case .filesPutCancel(let id):
+            folderFiles.cancel(id: id)
         }
     }
 
@@ -692,21 +702,23 @@ actor Session {
             log.info("clipboard set received bytes=\(text.utf8.count, privacy: .public)")
             await setMacClipboard(text, id: id)
         case .imageChunk(let id, let size, let offset, let bytes):
-            await uploadChunk(id: id, size: size, offset: offset, bytes: bytes, fileName: nil)
+            await imageChunk(id: id, size: size, offset: offset, bytes: bytes)
         case .fileChunk(let id, let size, let offset, let bytes, let name):
-            await uploadChunk(id: id, size: size, offset: offset, bytes: bytes, fileName: name)
+            await fileChunk(id: id, size: size, offset: offset, bytes: bytes, name: name)
+        case .filesPut(let id, let size, let offset, let bytes, let name, let dest):
+            await filesPut(id: id, size: size, offset: offset, bytes: bytes, name: name, dest: dest)
         }
     }
 
-    /// An image (D36) or file (D42) chunk; `fileName` is nil for an image.
-    private func uploadChunk(id: String, size: Int, offset: Int, bytes: Data, fileName: String?) async {
+    /// An image chunk (D36): assembled in memory (at most 25 MiB), then saved and pasted.
+    private func imageChunk(id: String, size: Int, offset: Int, bytes: Data) async {
         if offset == 0, viewingWindowId == nil, viewingDisplayId == nil {
             images.reject(id: id)
             await sendUploadError(.windowNotFound, id: id)
             return
         }
         let url: URL
-        switch images.receive(id: id, size: size, offset: offset, bytes: bytes, fileName: fileName) {
+        switch images.receive(id: id, size: size, offset: offset, bytes: bytes) {
         case .needMore, .ignored:
             return
         case .failed(let code):
@@ -721,17 +733,59 @@ actor Session {
                 return
             }
             log.info("image saved type=\(type.rawValue, privacy: .public) bytes=\(image.count, privacy: .public)")
-        case .completeFile(let data, let name):
-            do {
-                url = try uploads.saveFile(data, name: name)
-            } catch {
-                log.error("file save failed: \(String(describing: error), privacy: .public)")
-                await sendUploadError(.internal, id: id)
-                return
-            }
-            log.info("file saved bytes=\(data.count, privacy: .public)")
         }
         await pasteIntoViewedWindow(url.path, id: id, path: url.path)
+    }
+
+    /// A 📎 File chunk (D42): streamed to `<uploads>/<UUID>/<name>`, then its path is pasted.
+    private func fileChunk(id: String, size: Int, offset: Int, bytes: Data, name: String) async {
+        let step: FileUploadReceiver.Step
+        if offset == 0 {
+            if viewingWindowId == nil, viewingDisplayId == nil {
+                pastedFiles.reject(id: id)
+                await sendUploadError(.windowNotFound, id: id)
+                return
+            }
+            let uploads = self.uploads
+            step = pastedFiles.start(id: id, size: size, name: name, bytes: bytes) { () throws(UploadFailure) in
+                (try uploads.makeFileFolder(), ownsFolder: true)
+            }
+        } else {
+            step = pastedFiles.append(id: id, size: size, offset: offset, bytes: bytes)
+        }
+        switch step {
+        case .needMore, .ignored:
+            return
+        case .failed(let code):
+            log.info("file upload failed code=\(code.rawValue, privacy: .public)")
+            await sendUploadError(code, id: id)
+        case .complete(let url):
+            log.info("file saved bytes=\(size, privacy: .public)")
+            await pasteIntoViewedWindow(url.path, id: id, path: url.path)
+        }
+    }
+
+    /// D58 ⬆︎ Upload here: streamed into the folder `dest` and renamed to a free name there.
+    /// Needs no viewed window; replies `result` with the final path.
+    private func filesPut(id: String, size: Int, offset: Int, bytes: Data, name: String, dest: String) async {
+        let step: FileUploadReceiver.Step
+        if offset == 0 {
+            step = folderFiles.start(id: id, size: size, name: name, bytes: bytes) { () throws(UploadFailure) in
+                (try UploadDestination.resolve(dest), ownsFolder: false)
+            }
+        } else {
+            step = folderFiles.append(id: id, size: size, offset: offset, bytes: bytes)
+        }
+        switch step {
+        case .needMore, .ignored:
+            return
+        case .failed(let code):
+            log.info("files.put failed code=\(code.rawValue, privacy: .public)")
+            await sendUploadError(code, id: id)
+        case .complete(let url):
+            log.info("files.put saved bytes=\(size, privacy: .public)")
+            await send(.result(id: id, path: url.path))
+        }
     }
 
     /// Sets the Mac clipboard and sends ⌘V to the viewed window through the ordered input
@@ -760,7 +814,11 @@ actor Session {
     private func sendUploadError(_ code: ErrorCode, id: String) async {
         let message: String
         switch code {
-        case .tooLarge: message = "Too large"
+        case .tooLarge: message = "Too large (max 2 GB)"
+        case .notFound: message = "The folder does not exist"
+        case .notADirectory: message = "Not a folder"
+        case .notWritable, .noAccess: message = "The folder is not writable"
+        case .diskFull: message = "The Mac's disk is full"
         case .unsupportedType: message = "Not a supported image (PNG, JPEG, HEIC, GIF, WebP)"
         case .windowNotFound: message = "Open a window first"
         case .permissionAccessibility: message = "Mac needs Accessibility permission to control windows."
@@ -1058,6 +1116,9 @@ actor Session {
         thumbsTask?.cancel()
         appOpenTask?.cancel()
         searchTask?.cancel()
+        // An unfinished file upload leaves no part file behind (D42, D58).
+        pastedFiles.abort()
+        folderFiles.abort()
         // Replacing or ending the session also closes its peer connection (D22).
         closePeer()
         await input.shutdown()

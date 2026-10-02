@@ -123,21 +123,6 @@ import Testing
         }
     }
 
-    @Test func fileUploadsAreNotSniffedAndHaveTheirOwnLimit() {
-        var a = ImageUploadAssembler()
-        let pdf = Data("%PDF-1.7\n".utf8)
-        #expect(a.receive(id: "f1", size: 20, offset: 0, bytes: pdf, fileName: "a.pdf") == .needMore)
-        let rest = Data(repeating: 1, count: 20 - pdf.count)
-        #expect(a.receive(id: "f1", size: 20, offset: pdf.count, bytes: rest, fileName: "") == .completeFile(pdf + rest, name: "a.pdf"))
-        // Over 25 MiB is fine for a file, over 100 MiB is not.
-        #expect(a.receive(id: "f2", size: ImageUploadAssembler.maxFileBytes, offset: 0, bytes: pdf, fileName: "b") == .needMore)
-        #expect(a.receive(id: "f3", size: ImageUploadAssembler.maxFileBytes + 1, offset: 0, bytes: pdf, fileName: "c") == .failed(.tooLarge))
-        #expect(a.receive(id: "f3", size: ImageUploadAssembler.maxFileBytes + 1, offset: pdf.count, bytes: Data([1]), fileName: "") == .ignored)
-        // An image chunk cannot continue a file upload.
-        #expect(a.receive(id: "f4", size: 20, offset: 0, bytes: pdf, fileName: "d") == .needMore)
-        #expect(a.receive(id: "f4", size: 20, offset: pdf.count, bytes: Data([1])) == .failed(.badRequest))
-    }
-
     @Test func sanitizesFileNames() {
         #expect(UploadStore.sanitizedFileName("report.pdf") == "report.pdf")
         #expect(UploadStore.sanitizedFileName("My Report 2026.pdf") == "My Report 2026.pdf")
@@ -154,10 +139,19 @@ import Testing
         #expect(long.hasSuffix(".pdf") && long.hasPrefix("あ"))
     }
 
-    @Test func savesFilesInAUniqueSubdirectoryWithTheirName() throws {
+    /// D42: each 📎 File is streamed into its own `<UUID>` folder (mode 0700) under its name.
+    @Test func streamsFilesIntoAUniqueSubdirectoryWithTheirName() throws {
         try withStore { store, _ in
-            let a = try store.saveFile(Data("one".utf8), name: "../report.pdf")
-            let b = try store.saveFile(Data("two".utf8), name: "report.pdf")
+            func upload(_ id: String, _ name: String, _ bytes: Data) -> URL? {
+                var r = FileUploadReceiver()
+                let step = r.start(id: id, size: bytes.count, name: name, bytes: bytes) { () throws(UploadFailure) in
+                    (try store.makeFileFolder(), ownsFolder: true)
+                }
+                guard case .complete(let url) = step else { return nil }
+                return url
+            }
+            let a = try #require(upload("f1", "../report.pdf", Data("one".utf8)))
+            let b = try #require(upload("f2", "report.pdf", Data("two".utf8)))
             #expect(a.lastPathComponent == "report.pdf" && b.lastPathComponent == "report.pdf")
             #expect(a != b)
             for url in [a, b] {
@@ -166,6 +160,7 @@ import Testing
                 #expect(UUID(uuidString: folder.lastPathComponent) != nil)
                 let mode = try FileManager.default.attributesOfItem(atPath: folder.path)[.posixPermissions] as? Int
                 #expect(mode == 0o700)
+                #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["report.pdf"])
             }
             #expect(try Data(contentsOf: a) == Data("one".utf8))
             #expect(try Data(contentsOf: b) == Data("two".utf8))
@@ -177,8 +172,14 @@ import Testing
             let fm = FileManager.default
             let now = Date()
             let old = now.addingTimeInterval(-(UploadStore.maxAge + 60))
-            let oldFile = try store.saveFile(Data([1]), name: "old.pdf")
-            let newFile = try store.saveFile(Data([2]), name: "new.pdf")
+            func save(_ name: String) throws -> URL {
+                let folder = try store.makeFileFolder()
+                let url = folder.appendingPathComponent(name)
+                try Data([1]).write(to: url)
+                return url
+            }
+            let oldFile = try save("old.pdf")
+            let newFile = try save("new.pdf")
             try fm.setAttributes([.modificationDate: old], ofItemAtPath: oldFile.deletingLastPathComponent().path)
             #expect(store.removeExpired(now: now) == 1)
             #expect(!fm.fileExists(atPath: oldFile.deletingLastPathComponent().path))
