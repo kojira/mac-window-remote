@@ -1,8 +1,9 @@
 // Unit tests for display mode (DESIGN.md D56): the Displays tab, a display in the slots, the
-// hidden ☰ and 📱, and the click path to `view.start {displayId}`.
+// hidden ☰ and 📱, D59's ⧉ (view the front window), and the click path to `view.start {displayId}`.
 // A small fake DOM stands in for the browser. Run: node --test tests/web
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 class FakeElement {
   constructor(tag) {
@@ -38,7 +39,8 @@ globalThis.document = { createElement: (tag) => new FakeElement(tag) };
 globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, String(v)) };
 
 const {
-  decodeDisplays, displayTarget, isDisplay, renderDisplayList, sameTarget, viewStartMessage, viewStateMatches, viewerControls,
+  decodeDisplays, displayTarget, frontWindowResult, isDisplay, renderDisplayList, sameTarget, viewFrontMessage, viewStartMessage,
+  viewStateMatches, viewerControls,
 } = await import('../../web/displays.js');
 const { parseSlots, resolveSlot } = await import('../../web/slots.js');
 const { SlotBar } = await import('../../web/slotbar.js');
@@ -90,10 +92,36 @@ test('a display target: view.start, view.state matching, and the window path unc
   assert.ok(!sameTarget(d, { id: 2, app: 'A', title: 't' }));
 });
 
-test('☰ and 📱 are hidden for a display and shown for a window', () => {
-  assert.deepEqual(viewerControls(displayTarget({ id: 2, name: 'S' })), { appMenu: false, fitWindow: false });
-  assert.deepEqual(viewerControls({ id: 7, app: 'A', title: 't' }), { appMenu: true, fitWindow: true });
-  assert.deepEqual(viewerControls(null), { appMenu: true, fitWindow: true });
+test('☰ and 📱 are hidden for a display and shown for a window; ⧉ only for a display (D59)', () => {
+  assert.deepEqual(viewerControls(displayTarget({ id: 2, name: 'S' })), { appMenu: false, fitWindow: false, frontWindow: true });
+  assert.deepEqual(viewerControls({ id: 7, app: 'A', title: 't' }), { appMenu: true, fitWindow: true, frontWindow: false });
+  assert.deepEqual(viewerControls(null), { appMenu: true, fitWindow: true, frontWindow: false });
+});
+
+test('D59: ⧉ sends view.front for the viewed display, and the reply opens the window like a list pick', () => {
+  const d = displayTarget({ id: 2, name: 'Studio' });
+  assert.deepEqual(viewFrontMessage(d), { t: 'view.front', displayId: 2 });
+  assert.equal(viewFrontMessage({ id: 2, app: 'A', title: 't' }), null, 'no view.front from a window');
+  const w = frontWindowResult({ t: 'view.front.result', displayId: 2, windowId: 7, app: 'Editor', title: 'Notes' }, d);
+  assert.deepEqual(w, { id: 7, app: 'Editor', title: 'Notes' });
+  // The list's pick path: a window target, view.start {windowId}, ☰ and 📱 back, ⧉ gone.
+  assert.ok(!isDisplay(w));
+  assert.deepEqual(viewStartMessage(w), { t: 'view.start', windowId: 7 });
+  assert.deepEqual(viewerControls(w), { appMenu: true, fitWindow: true, frontWindow: false });
+  assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 2 }, d), 'none', 'the no-window toast');
+  assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 3, windowId: 7 }, d), null, 'another display');
+  assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 2, windowId: 7 }, w), null, 'already on a window');
+});
+
+test('D59: ⧉ sits where 📱 is, is hidden until a display is viewed, and is hidden while typing', () => {
+  const html = readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../../web/style.css', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../../web/app.js', import.meta.url), 'utf8');
+  assert.match(html, /id="fit-window"[^\n]*\n\s*<button id="front-window" type="button" aria-label="View the front window" title="View the front window" hidden>⧉<\/button>/);
+  assert.match(css, /#bottom-bar\.typing[^{]*#front-window[^{]*\{ display: none; \}/);
+  assert.match(app, /\$\('front-window'\)\.hidden = !controls\.frontWindow;/);
+  assert.match(app, /toast\('No window in front on this display'\)/);
+  assert.match(app, /else if \(w\) openWindow\(w\);/, 'the Windows list pick path');
 });
 
 test('a display slot is stored, resolves by id then name, and is unavailable when unplugged', () => {

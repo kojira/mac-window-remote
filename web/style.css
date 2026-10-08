@@ -96,7 +96,8 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .slot.current { border-color: #0a84ff; }
 /* While typing or with the key panel open (D54), the text field takes the place of the slots and Fit (D33). */
 #bottom-bar.typing #slots, #bottom-bar.typing #fit, #bottom-bar.typing #fit-window,
-#bottom-bar.typing #audio-mode, #bottom-bar.typing #mic, #bottom-bar.typing #app-menu { display: none; }
+#bottom-bar.typing #audio-mode, #bottom-bar.typing #mic, #bottom-bar.typing #app-menu,
+#bottom-bar.typing #front-window { display: none; }
 /* D53: a one-row textarea that wraps (no horizontal scroll); TextInput sets its height. */
 #text { flex: 0 0 0; min-width: 0; opacity: 0; width: 0; height: 44px; padding: 11px 0; border-width: 0;
   font: inherit; font-size: 16px; line-height: 20px; color: #fff; background: #222; border-style: solid;
@@ -104,7 +105,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
   white-space: pre-wrap; margin: 0; display: block; }
 #bottom-bar.typing #text { flex: 1; opacity: 1; padding: 11px 10px; border-width: 1px; }
 #keyboard.active, #fit-window.active, #mic.on { background: #0a84ff; }
-#fit-window, #mic { width: 40px; padding: 0; font-size: 20px; }
+#fit-window, #mic, #front-window { width: 40px; padding: 0; font-size: 20px; }
 /* D57: waiting for the microphone permission. */
 #mic.starting { background: #3a3a3c; opacity: 0.7; }
 /* D39: 🔇 Off → 🔊 App → 🔊 All; an orange dot while iOS still needs a tap to start the sound. */

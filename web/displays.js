@@ -40,10 +40,28 @@ export function decodeDisplays(msg) {
 }
 
 /// Bottom-bar buttons shown for a target: a display has no app menu (☰) and no window to fit
-/// (📱) (D43, D35).
+/// (📱) (D43, D35); in their place it has ⧉, view the front window (D59).
 export function viewerControls(target) {
   const display = isDisplay(target);
-  return { appMenu: !display, fitWindow: !display };
+  return { appMenu: !display, fitWindow: !display, frontWindow: display };
+}
+
+/// D59: asks the Mac which window to view instead of the display `target`, or null for a window.
+export function viewFrontMessage(target) {
+  return isDisplay(target) ? { t: 'view.front', displayId: target.id } : null;
+}
+
+/// D59: the `view.front.result` for display `target` as the window to open {id, app, title}
+/// (the Windows list's pick), 'none' when no window is in front on the display, or null when
+/// the reply is not for `target` (the view moved on meanwhile).
+export function frontWindowResult(msg, target) {
+  if (!msg || !isDisplay(target) || msg.displayId !== target.id) return null;
+  if (!Number.isInteger(msg.windowId)) return 'none';
+  return {
+    id: msg.windowId,
+    app: typeof msg.app === 'string' ? msg.app : '',
+    title: typeof msg.title === 'string' ? msg.title : '',
+  };
 }
 
 /// Fills `container` with one row per display: thumbnail, name, and size in points.
