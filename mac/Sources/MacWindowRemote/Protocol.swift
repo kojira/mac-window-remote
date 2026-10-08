@@ -66,6 +66,8 @@ enum ClientMessage: Equatable {
     case displaysList
     /// View a whole display (D56): `view.start` with `displayId` instead of `windowId`.
     case viewStartDisplay(displayId: UInt32)
+    /// D59: which window to view instead of display `displayId`; answered by `view.front.result`.
+    case viewFront(displayId: UInt32)
     case viewStop
     /// Thumbnails of the quick-switch slot windows, at most `maxThumbnailRequest` (D33).
     case thumbsRequest(windowIds: [UInt32])
@@ -234,6 +236,8 @@ extension ClientMessage {
             return .viewStart(windowId: try require(e.windowId, "windowId"))
         case "displays.list":
             return .displaysList
+        case "view.front":
+            return .viewFront(displayId: try require(e.displayId, "displayId"))
         case "view.stop":
             return .viewStop
         case "thumbs.request":
@@ -357,7 +361,7 @@ extension ClientMessage {
     /// The channel that carries this message type (D22).
     var channel: MessageChannel {
         switch self {
-        case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
+        case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .viewFront, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
              .filesList, .filesSearch, .downloadRequest, .filesPutCancel:
             return .socket
         case .move, .scroll, .point: return .motion
@@ -370,6 +374,7 @@ extension ClientMessage {
         case .windowsList: return "windows.list"
         case .viewStart, .viewStartDisplay: return "view.start"
         case .displaysList: return "displays.list"
+        case .viewFront: return "view.front"
         case .viewStop: return "view.stop"
         case .thumbsRequest: return "thumbs.request"
         case .rtcOffer: return "rtc.offer"
@@ -523,6 +528,8 @@ enum ServerMessage {
     case displays([DisplayItem])
     /// `view.state` for a viewed display (D56); `window_gone` means the display was removed.
     case displayViewState(displayId: UInt32, state: ViewState, reason: String?)
+    /// D59: the window to view instead of display `displayId`, or nil when none is on it.
+    case viewFrontResult(displayId: UInt32, window: WindowItem?)
     case error(code: ErrorCode, message: String, id: String? = nil)
     case ping
     /// Server-confirmed cursor position (D24); `seq` is the highest applied `move.seq`.
@@ -568,6 +575,9 @@ enum ServerMessage {
     }
     private struct DisplayView: Encodable {
         let t = "view.state"; let displayId: UInt32; let state: ViewState; let reason: String?
+    }
+    private struct FrontResult: Encodable {
+        let t = "view.front.result"; let displayId: UInt32; let windowId: UInt32?; let app: String?; let title: String?
     }
     private struct Failure: Encodable { let t = "error"; let id: String?; let code: ErrorCode; let message: String }
     private struct Ping: Encodable { let t = "ping" }
@@ -632,6 +642,8 @@ enum ServerMessage {
             }))
         case .displayViewState(let id, let state, let reason):
             data = try? encoder.encode(DisplayView(displayId: id, state: state, reason: reason))
+        case .viewFrontResult(let displayId, let window):
+            data = try? encoder.encode(FrontResult(displayId: displayId, windowId: window?.id, app: window?.app, title: window?.title))
         case .error(let code, let message, let id):
             data = try? encoder.encode(Failure(id: id, code: code, message: message))
         case .ping: data = try? encoder.encode(Ping())

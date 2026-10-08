@@ -231,6 +231,19 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         displayAssertion.declareUserActivity()
     }
 
+    func frontWindow(onDisplay displayId: UInt32) async -> WindowItem? {
+        guard let frame = DisplayCatalog.frame(displayId) else { return nil }
+        let windows = (try? await WindowCatalog.shareableWindows()) ?? []
+        let frontPid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        guard let id = WindowCatalog.frontWindowId(onDisplay: frame, frontPid: frontPid, order: WindowCatalog.onScreenOrder(),
+                                                   pickable: Set(windows.map(\.windowID))),
+              let window = windows.first(where: { $0.windowID == id }) else {
+            log.info("front window on display id=\(displayId, privacy: .public): none")
+            return nil
+        }
+        return WindowCatalog.item(for: window)
+    }
+
     private func pid(for windowId: UInt32) -> pid_t? {
         lock.lock()
         defer { lock.unlock() }
