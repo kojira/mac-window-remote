@@ -2501,3 +2501,20 @@ Setup: BlackHole installed on the Mac; a meeting test page (or any app with a mi
 6. A read-only folder shows "… This folder is not writable"; a file over 2 GB is skipped with "Too large (max 2 GB)".
 7. 📎 File accepts a file up to 2 GB (over: "File too large (max 2 GB)") and still pastes its `/var/folders/…/uploads/<UUID>/<name>` path; 🖼 Image is unchanged.
 8. *Unit:* `FileUploadTests` (Finder collision names, the sanitizer, destination checks: missing, not a folder, symlink to a folder, file link; streaming into a hidden part and atomic rename without overwrite; part removed on a gap, cancel, newer upload, abort; the size cap up front and while writing with a small injected cap; read-only folder; errno mapping; `files.put`/`files.put.cancel` decoding), `SessionFilesPutTests` through the real server (save with collision, injected cap, missing folder, part removed on disconnect and on cancel), `UploadsTests` (📎 streamed into its `<UUID>` folder); `tests/web/files.test.mjs` (button states, picker, drop and highlight, refresh in the current sort) and `tests/web/upload.test.mjs` (2 GB limit, Blob chunks, the send-buffer cap, sequential files with progress, errors, cancel, interrupt).
+
+## 37. View the front window from display mode (user decision D59, Issue #54; amends D56)
+
+### D59. ⧉ in display mode switches to the window in front on the viewed display
+
+- **Entry.** While a display is viewed, the bottom bar shows **⧉** ("View the front window") where 📱 and ☰ are for a window; it is not shown for a window and is hidden while typing like the others.
+- **Wire.** Tap → `{"t":"view.front","displayId":n}` (WebSocket). The Mac answers `{"t":"view.front.result","displayId":n,"windowId":w,"app":"…","title":"…"}`, or without `windowId`/`app`/`title` when there is none. The Mac does not change the view itself.
+- **Page.** A result for the viewed display opens the window through the Windows list's pick path (`openWindow`: stored target, `view.start {windowId}`, slots, ☰/📱 back, ⧉ hidden), so the raise, input, D38 follow and slots behave as for a picked window. A result without a window shows the toast "No window in front on this display". A result for another display is ignored.
+- **Choice (Mac, `WindowCatalog.frontWindowId(onDisplay:…)`, pure over the front-to-back on-screen list).** A window is on the display when its frame centre is inside the display's frame (`CGDisplayBounds`). First the frontmost app's (`NSWorkspace.frontmostApplication`) frontmost pickable window, if it is on the display; otherwise the topmost layer-0 pickable window on the display; otherwise none. Pickable means in the Windows list (`WindowCatalog.shareableWindows`: on screen, layer 0, at least 50 × 50, not ours).
+- **Source changes:** `WindowCatalog.swift`, `Protocol.swift`, `Session.swift`, `MacBackend.swift`; `web/displays.js`, `web/app.js`, `web/index.html`, `web/style.css`.
+
+### D59 acceptance criteria
+1. *iPhone:* view a display with a window of the front app on it → ⧉ → that window is viewed as if picked from the Windows list: its title, ☰ and 📱 shown, ⧉ gone, ‹ returns to the list, the slots highlight it, and it is raised on the first input.
+2. With the front app's window on another display, ⧉ views the topmost window on the viewed display. On a display with no window (only the desktop), ⧉ shows "No window in front on this display" and the display stays viewed.
+3. ⧉ is not shown for a window and is hidden while typing.
+4. *PC browser:* the same with the mouse.
+5. *Unit:* `FrontWindowTests` (front app's window on the display, front app elsewhere → topmost here, centre rule, none, layer and size filtering, our own window excluded, `view.front` decoding and `view.front.result` encoding), `SessionDisplayTests` (`view.front` through the real server leaves the display view as is); `tests/web/displays.test.mjs` (⧉ only for a display and hidden while typing, the message, the result to the pick path, the no-window toast).

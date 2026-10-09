@@ -57,6 +57,9 @@ protocol SessionBackend: Sendable {
     func viewingDisplayChanged(_ display: DisplayItem?)
     /// Turns a sleeping display on when viewing starts (`IOPMAssertionDeclareUserActivity`, #49).
     func declareUserActivity()
+    /// D59: the pickable window to view instead of display `displayId`, or nil
+    /// (`WindowCatalog.frontWindowId(onDisplay:…)`).
+    func frontWindow(onDisplay displayId: UInt32) async -> WindowItem?
 }
 
 /// Backends without displays: the test fakes of window-mode features.
@@ -68,6 +71,7 @@ extension SessionBackend {
     func displayCursor(displayId: UInt32) async -> CursorState? { nil }
     func viewingDisplayChanged(_ display: DisplayItem?) {}
     func declareUserActivity() {}
+    func frontWindow(onDisplay displayId: UInt32) async -> WindowItem? { nil }
 }
 
 /// Backends without a microphone path (D57): the test fakes of other features.
@@ -389,6 +393,9 @@ actor Session {
         case .viewStartDisplay(let displayId):
             appOpenTask?.cancel()
             await startViewingDisplay(displayId)
+        case .viewFront(let displayId):
+            // D59: the page views the answer through its normal pick path (`view.start`).
+            await send(.viewFrontResult(displayId: displayId, window: await backend.frontWindow(onDisplay: displayId)))
         case .thumbsRequest(let windowIds):
             sendThumbnails(windowIds)
         case .viewStop:

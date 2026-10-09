@@ -76,6 +76,9 @@ private final class DisplayBackend: SessionBackend, @unchecked Sendable {
     }
     func viewingDisplayChanged(_ display: DisplayItem?) { lock.withLock { displayViews.append(display?.id) } }
     func declareUserActivity() { lock.withLock { wakes += 1 } }
+    func frontWindow(onDisplay displayId: UInt32) async -> WindowItem? {
+        displayId == 2 ? WindowItem(id: 7, pid: 1, app: "Editor", title: "Notes", w: 800, h: 600) : nil
+    }
 }
 
 @Suite struct DisplayModeTests {
@@ -206,6 +209,14 @@ private final class CursorLog: @unchecked Sendable {
                 #expect(Self.isState(try await nextText(), "displayId", 2, "starting"))
                 #expect(Self.isState(try await nextText(), "displayId", 2, "streaming"))
                 #expect(backend.wakeCount == 1)
+                // D59: the front window is only named; the view stays on the display until view.start.
+                try await outbound.write(.text(#"{"t":"view.front","displayId":2}"#))
+                let front = try await nextText()
+                #expect(front.contains(#""t":"view.front.result""#) && front.contains(#""windowId":7"#))
+                try await outbound.write(.text(#"{"t":"view.front","displayId":9}"#))
+                let none = try await nextText()
+                #expect(none.contains(#""t":"view.front.result""#) && !none.contains("windowId"))
+                #expect(backend.displayViewChanges == [2])
                 #expect(backend.displayViewChanges == [2])
                 // A display that is not connected ends the view like a closed window.
                 try await outbound.write(.text(#"{"t":"view.start","displayId":9}"#))

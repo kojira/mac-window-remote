@@ -58,6 +58,8 @@ enum WindowCatalog {
         var pid: pid_t
         var layer: Int
         var size: CGSize
+        /// Top-left corner in global points; D59 needs it to tell which display a window is on.
+        var origin: CGPoint = .zero
     }
 
     /// The on-screen windows, front to back.
@@ -70,7 +72,7 @@ enum WindowCatalog {
                   let layer = entry[kCGWindowLayer as String] as? Int,
                   let boundsDict = entry[kCGWindowBounds as String] as! CFDictionary?,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict) else { return nil }
-            return OrderEntry(id: id, pid: pid, layer: layer, size: bounds.size)
+            return OrderEntry(id: id, pid: pid, layer: layer, size: bounds.size, origin: bounds.origin)
         }
     }
 
@@ -90,6 +92,25 @@ enum WindowCatalog {
     static func switchedWindowId(from viewed: UInt32, frontPid: pid_t, order: [OrderEntry], pickable: Set<UInt32>) -> UInt32? {
         guard let id = frontWindowId(of: frontPid, order: order, pickable: pickable), id != viewed else { return nil }
         return id
+    }
+
+    /// The window D59's "view the front window" opens from display `displayFrame` (global
+    /// points): the front app's frontmost pickable window if its centre is on that display,
+    /// otherwise the topmost pickable layer-0 window whose centre is on it, or nil.
+    /// `pickable` is the window list's ids (D3), so our own windows are never chosen.
+    static func frontWindowId(onDisplay displayFrame: CGRect, frontPid: pid_t?, order: [OrderEntry], pickable: Set<UInt32>) -> UInt32? {
+        func onDisplay(_ e: OrderEntry) -> Bool {
+            let frame = CGRect(origin: e.origin, size: e.size)
+            return displayFrame.contains(CGPoint(x: frame.midX, y: frame.midY))
+        }
+        if let frontPid, let id = frontWindowId(of: frontPid, order: order, pickable: pickable),
+           let e = order.first(where: { $0.id == id }), onDisplay(e) {
+            return id
+        }
+        return order.first { e in
+            e.layer == 0 && pickable.contains(e.id) && onDisplay(e)
+                && e.size.width >= minimumSize && e.size.height >= minimumSize
+        }?.id
     }
 
     static func windowName(_ windowId: UInt32) -> String? {

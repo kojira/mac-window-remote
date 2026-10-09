@@ -11,7 +11,8 @@ import { MenuSheet, decodeMenu } from './appmenu.js';
 import { FileSheet, startDownload } from './files.js';
 import { APP_OPEN_TIMEOUT_MS, LIST_TAB_KEY, decodeApps, parseListTab, renderAppGrid } from './apps.js';
 import {
-  decodeDisplays, displayTarget, isDisplay, renderDisplayList, viewStartMessage, viewStateMatches, viewerControls,
+  decodeDisplays, displayTarget, frontWindowResult, isDisplay, renderDisplayList, viewFrontMessage, viewStartMessage,
+  viewStateMatches, viewerControls,
 } from './displays.js';
 import { MacClipboard } from './macclip.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
@@ -214,6 +215,20 @@ function onDisplays(msg) {
   listMessage(displays.length === 0 ? 'No displays found.' : '');
 }
 
+/// D59: ⧉ asks the Mac for the front window on the viewed display; the answer opens it the
+/// way the Windows list does.
+$('front-window').addEventListener('click', () => {
+  const message = viewFrontMessage(viewingTarget());
+  if (message && !send(message)) toast('Not connected to the Mac');
+});
+
+function onViewFrontResult(msg) {
+  if (screen !== 'viewer') return;
+  const w = frontWindowResult(msg, viewingTarget());
+  if (w === 'none') toast('No window in front on this display');
+  else if (w) openWindow(w);
+}
+
 /// The Mac launches or activates the app and answers `view.switched` for its front window, or
 /// an error (D40).
 function openApp(a) {
@@ -283,6 +298,7 @@ function renderFitWindow() {
   const controls = viewerControls(viewingTarget());
   $('app-menu').hidden = !controls.appMenu;
   $('fit-window').hidden = !controls.fitWindow;
+  $('front-window').hidden = !controls.frontWindow;
   const b = $('fit-window');
   const on = fittedWindows.get(viewingWindowId()) === true;
   b.classList.toggle('active', on);
@@ -609,6 +625,9 @@ function onMessage(msg) {
       break;
     case 'view.switched':
       onViewSwitched(msg);
+      break;
+    case 'view.front.result':
+      onViewFrontResult(msg);
       break;
     case 'result':
       if (!folderUploader.onReply(msg)) onUploadReply(msg);
