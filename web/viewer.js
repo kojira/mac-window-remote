@@ -137,12 +137,14 @@ export class Viewer {
     this.clampAndApply();
   }
 
-  /// The stage size changes in change() (the key panel, D34): keep the zoom relative to fit.
+  /// The stage size changes in change() (the key panel, D34). D60: the image keeps its size and
+  /// its bottom edge stays where it was, so opening the panel cuts the top off instead of
+  /// shrinking the image; closing it gives the room back (the fit floor applies as usual).
   keepZoom(change) {
-    const zoom = this.size ? this.scale / this.fitScale() : 1;
+    const oldHeight = this.stage.clientHeight;
     change();
     if (!this.size) return;
-    this.scale = this.fitScale() * zoom;
+    this.ty += this.stage.clientHeight - oldHeight;
     this.clampAndApply();
   }
 

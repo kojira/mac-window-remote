@@ -1353,6 +1353,8 @@ On a real iPhone against the real Mac:
 ## 14. Key panel (user decision; supersedes the D13 key bar layout)
 
 ### D34. A 2×6 key panel toggled by ⌨︎
+
+> *D60 (owner request):* opening the key panel no longer shrinks the image to the smaller stage. The zoom stays, and the image moves up by the height the stage lost, so the panel covers the top instead of making the text smaller. Closing it gives the room back. The Fit button still fits the image to the smaller stage on request.
 > *Amended by §16 D36:* the normal layer has a third row, 📋 Paste and 🖼 Image.
 > *Amended by §17 D37:* that third row starts with ⌘F1 and ⌘Tab.
 > *Amended by §21 D41:* that third row is ⌘F1, ⌘Tab, space, ⏎, ⋯ (Paste, Image, ⌘Q menu).
