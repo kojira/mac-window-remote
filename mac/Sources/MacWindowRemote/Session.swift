@@ -140,9 +140,13 @@ actor SessionHub {
         self.onStatus = onStatus
     }
 
-    /// The identity check for one request (D32). The header value is never logged.
+    /// The identity check for one request (D32). The header value is never logged. A request
+    /// rejected as another user or unknown owner makes `OwnerLogin` ask the CLI again (rate
+    /// limited), so a wrong or missing answer from boot is corrected by the owner's next request.
     func admit(login: String?) async -> TailscaleIdentity.Decision {
-        TailscaleIdentity.check(header: login, owner: await owner.current())
+        let decision = TailscaleIdentity.check(header: login, owner: await owner.current())
+        guard decision == .otherUser || decision == .ownerUnknown else { return decision }
+        return TailscaleIdentity.check(header: login, owner: await owner.recheck())
     }
 
     /// Makes `session` the active client, closing the previous one with 4002.
@@ -186,7 +190,7 @@ actor SessionHub {
     func handle(inbound: WebSocketInboundStream, outbound: WebSocketOutboundWriter, login: String?) async {
         let decision = await admit(login: login)
         guard decision == .allowed else {
-            log.info("connection not allowed reason=\(String(describing: decision), privacy: .public)")
+            log.notice("connection not allowed reason=\(String(describing: decision), privacy: .public)")
             try? await outbound.close(.unknown(CloseCode.notAllowed), reason: "not_allowed")
             return
         }

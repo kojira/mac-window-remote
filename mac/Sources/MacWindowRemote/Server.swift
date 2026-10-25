@@ -121,7 +121,7 @@ struct TailscaleIdentityMiddleware<Context: RequestContext>: RouterMiddleware {
         let login = request.headers[HTTPField.Name(TailscaleIdentity.loginHeader)!]
         let decision = await hub.admit(login: login)
         guard decision == .allowed else {
-            log.info("http request not allowed reason=\(String(describing: decision), privacy: .public)")
+            log.notice("http request not allowed reason=\(String(describing: decision), privacy: .public)")
             return Response(
                 status: .forbidden,
                 headers: [.contentType: "text/plain; charset=utf-8"],

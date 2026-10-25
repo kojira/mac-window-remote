@@ -125,3 +125,30 @@ private final class FakeBackend: SessionBackend {
         }
     }
 }
+
+/// `SessionHub.admit` asks the CLI again only after a rejection (D32).
+@Suite struct OwnerRecheckTests {
+    /// A wrong answer read at boot is corrected by the owner's next request, rate limited.
+    @Test func wrongCachedOwnerIsCorrectedAfterRejection() async {
+        let clock = FakeClock()
+        let cli = FakeCLI(["placeholder@example.com", "owner@example.com"])
+        let hub = SessionHub(owner: OwnerLogin(override: { "" }, query: cli.query, now: clock.now), backend: FakeBackend())
+        // The first request reads the wrong answer and, asked again within 5 s, stays rejected.
+        #expect(await hub.admit(login: "owner@example.com") == .otherUser)
+        #expect(cli.calls == 1)
+        clock.advance(.seconds(5))
+        #expect(await hub.admit(login: "owner@example.com") == .allowed)
+        #expect(cli.calls == 2)
+    }
+
+    @Test func allowedPathDoesNotQuery() async {
+        let clock = FakeClock()
+        let cli = FakeCLI(["owner@example.com"])
+        let hub = SessionHub(owner: OwnerLogin(override: { "" }, query: cli.query, now: clock.now), backend: FakeBackend())
+        for _ in 0..<5 { #expect(await hub.admit(login: "owner@example.com") == .allowed) }
+        // A missing header does not make it ask either.
+        clock.advance(.seconds(10))
+        #expect(await hub.admit(login: nil) == .missingHeader)
+        #expect(cli.calls == 1)
+    }
+}

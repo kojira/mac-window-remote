@@ -58,7 +58,11 @@ final class AppState: ObservableObject {
         }
     }
 
-    private let owner = OwnerLogin()
+    /// The menu's "Allowed:" line follows every change, including a correction after a rejected
+    /// request or a background refresh.
+    private let owner = OwnerLogin(onChange: {
+        Task { @MainActor in AppState.shared.refreshAllowedLogin() }
+    })
 
     func launch() {
         RTCHost.initialize()
@@ -105,11 +109,11 @@ final class AppState: ObservableObject {
     func refreshPermissions() {
         let now = Permissions.status
         if now != permissions { permissions = now }
-        if allowedLogin == nil { refreshAllowedLogin() }
+        refreshAllowedLogin()
     }
 
     /// Reads the allowed login for the menu. `OwnerLogin` asks the Tailscale CLI at most every
-    /// 30 s while the login is unknown.
+    /// 5 s while the login is unknown and refreshes a known one in the background (D32).
     func refreshAllowedLogin() {
         let owner = owner
         Task {
