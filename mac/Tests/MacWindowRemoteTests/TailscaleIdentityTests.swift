@@ -41,4 +41,60 @@ import Testing
         let fromCLI = OwnerLogin(override: { "" }, query: { "cli@example.com" })
         #expect(await fromCLI.current() == "cli@example.com")
     }
+
+    @Test func unknownIsRetried() async {
+        let clock = FakeClock()
+        let cli = FakeCLI([nil, "owner@example.com"])
+        let owner = OwnerLogin(override: { "" }, query: cli.query, now: clock.now)
+        #expect(await owner.current() == nil)
+        #expect(await owner.current() == nil)
+        #expect(cli.calls == 1)
+        clock.advance(.seconds(5))
+        #expect(await owner.current() == "owner@example.com")
+        #expect(cli.calls == 2)
+    }
+
+    @Test func hungQueryDoesNotBlockLaterLookups() async {
+        let clock = FakeClock()
+        let release = DispatchSemaphore(value: 0)
+        let cli = FakeCLI(["owner@example.com"], hangFirst: release)
+        let owner = OwnerLogin(override: { "" }, query: cli.query, now: clock.now, queryDeadline: .milliseconds(100))
+        #expect(await owner.current() == nil)
+        clock.advance(.seconds(5))
+        #expect(await owner.current() == "owner@example.com")
+        #expect(cli.calls == 2)
+        release.signal()
+    }
+}
+
+/// A clock the test moves by hand.
+final class FakeClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var instant = ContinuousClock.now
+
+    var now: @Sendable () -> ContinuousClock.Instant { { self.lock.withLock { self.instant } } }
+    func advance(_ by: Duration) { lock.withLock { instant += by } }
+}
+
+/// `tailscale status` answers in order (the last one repeats); optionally the first call hangs.
+final class FakeCLI: @unchecked Sendable {
+    private let lock = NSLock()
+    private var answers: [String?]
+    private var count = 0
+    private let hangFirst: DispatchSemaphore?
+
+    init(_ answers: [String?], hangFirst: DispatchSemaphore? = nil) {
+        self.answers = answers
+        self.hangFirst = hangFirst
+    }
+
+    var calls: Int { lock.withLock { count } }
+
+    var query: @Sendable () -> String? {
+        {
+            let n = self.lock.withLock { self.count += 1; return self.count }
+            if n == 1, let hang = self.hangFirst { hang.wait(); return "late@example.com" }
+            return self.lock.withLock { self.answers.count > 1 ? self.answers.removeFirst() : self.answers.first ?? nil }
+        }
+    }
 }
