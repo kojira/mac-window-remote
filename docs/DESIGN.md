@@ -1228,7 +1228,8 @@ channels. The interim WebSocket input and the JPEG frames of step 1 are gone.
     `/opt/homebrew/bin/tailscale`, `/usr/local/bin/tailscale`, then `PATH`. The answer is
     cached for the process lifetime. While it is unknown (Tailscale not installed, not
     running, or logged out) the CLI is asked again at most every 30 s, and **every request
-    is rejected**.
+    is rejected**. *(Amended below for #56: re-query after a rejection, 5 s retry, 60 s
+    refresh.)*
   - No header (direct local access, or a tagged device, which has no user login) or
     another login is rejected: HTTP **403** with the text "Not allowed: sign in to
     Tailscale as the Mac owner"; `/ws` is upgraded and then closed with **4001**
@@ -1254,6 +1255,20 @@ channels. The interim WebSocket input and the JPEG frames of step 1 are gone.
 - **Human setup:** no pairing step. Sign in to Tailscale on the iPhone with the same
   account as the Mac, run the `tailscale serve` command once, and open the https URL it
   prints in Safari (optionally Share → Add to Home Screen).
+- *Amended (#56, after a reboot with Launch at login rejected the owner until the app was
+  reopened):* the CLI answer is no longer trusted for the process lifetime.
+  - A known answer is used at once: an allowed request never runs the CLI.
+  - A request rejected as `otherUser` or `ownerUnknown` asks the CLI again, at most every
+    **5 s**, and is checked against the new answer. While unknown, lookups retry at most
+    every 5 s (was 30 s). A known answer older than **60 s** is refreshed in the background
+    by the next lookup. A failed run keeps the previous answer.
+  - One CLI run at a time. A run that has not answered within 10 s counts as unknown and
+    the next lookup starts a new one. The CLI's output is read as it arrives; the wait for
+    exit has a 5 s deadline (then the CLI is terminated), so a child that keeps the pipe
+    open cannot block the read.
+  - The menu's "Allowed:" line updates whenever the answer changes.
+  - Lookup results and rejections are logged at `notice` so they persist; the login itself
+    is logged only as private data.
 
 
 ## 13. Viewer bottom bar and quick-switch slots (user decision)
