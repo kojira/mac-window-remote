@@ -83,6 +83,8 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 #bottom-bar > button { height: 44px; flex: none; }
 #fit { padding: 0 10px; }
 #app-menu, #keyboard { width: 40px; padding: 0; font-size: 20px; }
+/* The ⌨︎ glyph's size depends on the font (tiny on some desktop browsers), so it is an SVG. */
+#keyboard .kb-icon { display: block; margin: auto; }
 #back { position: relative; width: 44px; padding: 0; font-size: 26px; line-height: 1; }
 #back .dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; }
 #slots { flex: 1; min-width: 0; display: flex; gap: 6px; justify-content: center; }
