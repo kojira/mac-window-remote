@@ -647,6 +647,9 @@ function onMessage(msg) {
     case 'download.ready':
       fileSheet.onReady(msg);
       break;
+    case 'files.rename.result':
+      fileSheet.onRenamed(msg);
+      break;
     case 'clipboard.mac':
       macClipboard.onMessage(msg);
       break;
@@ -1077,7 +1080,7 @@ const folderUploader = new FolderUploader({
   nextId: () => nextUploadId('p'),
   onDone: (dest) => fileSheet.refreshAfterUpload(dest),
 });
-const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload, uploader: folderUploader });
+const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload, uploader: folderUploader, toast });
 
 function openFiles() {
   keyPanel.close();

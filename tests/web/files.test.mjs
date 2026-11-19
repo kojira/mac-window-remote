@@ -24,6 +24,9 @@ class FakeElement {
   setAttribute(k, v) { this.attrs[k] = v; }
   append(...els) { for (const c of els) { c.parent = this; this.children.push(c); } }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
+  focus() { FakeElement.focused = this; }
+  blur() { if (FakeElement.focused === this) FakeElement.focused = null; }
+  setSelectionRange(start, end) { this.selection = [start, end]; }
   dispatch(type, extra = {}) {
     const e = { type, target: this, ...extra };
     for (let el = this; el; el = el.parent) for (const fn of el.listeners[type] ?? []) fn(e);
@@ -33,7 +36,7 @@ class FakeElement {
 globalThis.document = { createElement: (tag) => new FakeElement(tag) };
 const {
   FileSheet, breadcrumbs, compareEntries, decodeFiles, formatSize, parentPath, selectionSummary, sortEntries,
-  SORT_STORAGE_KEY,
+  SORT_STORAGE_KEY, renameNameError, renameSelectionEnd,
 } = await import('../../web/files.js');
 
 const HOME = '/home/u';
@@ -54,6 +57,7 @@ function setup(storage = fakeStorage(), { uploader = null } = {}) {
   root.hidden = true;
   const sent = [];
   const downloads = [];
+  const toasts = [];
   let connected = true;
   const sheet = new FileSheet({
     root,
@@ -61,6 +65,7 @@ function setup(storage = fakeStorage(), { uploader = null } = {}) {
     download: (url, name) => downloads.push([url, name]),
     storage,
     uploader,
+    toast: (t) => toasts.push(t),
   });
   const last = () => sent[sent.length - 1];
   const rows = () => sheet.list.children.filter((c) => c.className.startsWith('files-row'));
@@ -69,7 +74,7 @@ function setup(storage = fakeStorage(), { uploader = null } = {}) {
   const reply = (entries = LISTING, extra = {}) => sheet.onFiles({
     t: 'files', id: last().id, path: HOME, entries, total: entries.length, truncated: false, places: PLACES, ...extra,
   });
-  return { storage, root, sheet, sent, downloads, last, rows, notes, rowNamed, reply, disconnect: () => { connected = false; } };
+  return { storage, root, sheet, sent, downloads, toasts, last, rows, notes, rowNamed, reply, disconnect: () => { connected = false; } };
 }
 
 test('helpers: sizes, parent paths, breadcrumbs, and the selection summary', () => {
@@ -426,4 +431,161 @@ test('Upload here: after the upload, the folder is listed again in the current s
   sheet.close();
   sheet.refreshAfterUpload(HOME);
   assert.equal(sent.length, before + 1);
+});
+
+// D61: ✏️ Rename for exactly one selected file or folder.
+
+test('rename: the stem is pre-selected; names the Mac refuses are caught on the device', () => {
+  assert.equal(renameSelectionEnd('report.final.pdf', false), 12);
+  assert.equal(renameSelectionEnd('README', false), 6);
+  assert.equal(renameSelectionEnd('.zshrc', false), 6);
+  assert.equal(renameSelectionEnd('Photos.library', true), 14, 'a folder: the whole name');
+  for (const bad of ['', '/', 'a/b', '.', '..']) assert.equal(renameNameError(bad), 'Invalid name', bad);
+  for (const ok of ['.env', 'a..b', ' x ']) assert.equal(renameNameError(ok), '', ok);
+});
+
+test('rename: the button shows only with exactly one item selected, file or folder', () => {
+  const { sheet, reply, rowNamed } = setup();
+  sheet.open();
+  reply();
+  assert.equal(sheet.bar.hidden, true);
+  rowNamed('a.txt').children[0].dispatch('change');
+  assert.equal(sheet.renameButton.hidden, false);
+  assert.equal(sheet.renameButton.label, '✏️ Rename');
+  assert.equal(sheet.bar.children.indexOf(sheet.renameButton) + 1, sheet.bar.children.indexOf(sheet.downloadButton), 'next to Download');
+  rowNamed('b.bin').children[0].dispatch('change');
+  assert.equal(sheet.renameButton.hidden, true, 'two selected');
+  rowNamed('a.txt').children[0].dispatch('change');
+  rowNamed('b.bin').children[0].dispatch('change');
+  rowNamed('Docs').children[0].dispatch('change');
+  assert.equal(sheet.renameButton.hidden, false, 'one folder');
+});
+
+test('rename: the tap opens the editor focused with the stem selected; Esc and Cancel close it without sending', () => {
+  const { sheet, sent, reply, rowNamed } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  const before = sent.length;
+  sheet.renameButton.dispatch('click');
+  assert.equal(sheet.renameForm.hidden, false);
+  assert.equal(sheet.downloadButton.hidden, true);
+  assert.equal(sheet.renameButton.hidden, true);
+  assert.equal(sheet.renameInput.value, 'a.txt');
+  assert.equal(FakeElement.focused, sheet.renameInput, 'focused within the tap (iOS keyboard)');
+  assert.deepEqual(sheet.renameInput.selection, [0, 1]);
+  sheet.renameInput.dispatch('keydown', { key: 'Escape' });
+  assert.equal(sheet.renameForm.hidden, true);
+  assert.equal(sheet.downloadButton.hidden, false);
+  assert.equal(sent.length, before);
+  sheet.renameButton.dispatch('click');
+  sheet.renameCancel.dispatch('click');
+  assert.equal(sheet.renameForm.hidden, true);
+  // A folder: the whole name.
+  rowNamed('a.txt').children[0].dispatch('change');
+  rowNamed('Docs').children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  assert.deepEqual(sheet.renameInput.selection, [0, 4]);
+  assert.equal(sent.length, before);
+});
+
+test('rename: invalid names show an inline error and send nothing; an unchanged name just closes', () => {
+  const { sheet, sent, reply, rowNamed } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  const before = sent.length;
+  for (const bad of ['', '/', 'x/y', '.', '..']) {
+    sheet.renameInput.value = bad;
+    sheet.renameSubmit.dispatch('click');
+    assert.equal(sheet.renameError.label, 'Invalid name', bad);
+    assert.equal(sheet.renameForm.hidden, false);
+  }
+  sheet.renameInput.dispatch('input');
+  assert.equal(sheet.renameError.label, '', 'typing clears the error');
+  sheet.renameInput.value = 'a.txt';
+  sheet.renameInput.dispatch('keydown', { key: 'Enter' });
+  assert.equal(sheet.renameForm.hidden, true);
+  assert.equal(sent.length, before);
+});
+
+test('rename: Return sends files.rename; success toasts, clears the selection and lists again in the current sort', () => {
+  const { sheet, last, reply, rowNamed, toasts } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  sheet.renameInput.value = 'notes.md';
+  sheet.renameInput.dispatch('keydown', { key: 'Enter', isComposing: true });
+  assert.equal(last().t, 'files.list', 'Return while composing (IME) does not submit');
+  sheet.renameInput.dispatch('keydown', { key: 'Enter' });
+  const req = last();
+  assert.deepEqual(req, { t: 'files.rename', id: req.id, path: `${HOME}/a.txt`, name: 'notes.md' });
+  assert.equal(sheet.renameSubmit.label, 'Renaming…');
+  assert.equal(sheet.renameSubmit.disabled, true);
+  assert.equal(sheet.onRenamed({ t: 'files.rename.result', id: 'other', path: `${HOME}/a.txt`, newPath: `${HOME}/x` }), false);
+  assert.equal(sheet.onRenamed({ t: 'files.rename.result', id: req.id, path: `${HOME}/a.txt`, newPath: `${HOME}/notes.md` }), true);
+  assert.deepEqual(toasts, ['Renamed to notes.md']);
+  assert.equal(sheet.selected.size, 0);
+  assert.equal(sheet.bar.hidden, true);
+  assert.equal(sheet.renameForm.hidden, true);
+  assert.deepEqual(last(), { t: 'files.list', id: last().id, path: HOME, hidden: false, sort: 'mtime', desc: true });
+});
+
+test('rename: from search results the search runs again', () => {
+  const { sheet, last, reply, rows, toasts } = setup();
+  sheet.open();
+  reply();
+  sheet.query.value = 'rep';
+  sheet.search();
+  const q = last();
+  sheet.onFound({ t: 'files.found', id: q.id, base: HOME, truncated: false, timedOut: false, entries: [
+    { name: 'report.pdf', path: `${HOME}/Docs/report.pdf`, dir: false, size: 10, mtime: 0, link: false, parent: `${HOME}/Docs` },
+  ] });
+  rows()[0].children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  assert.deepEqual(sheet.renameInput.selection, [0, 6]);
+  sheet.renameInput.value = 'report-2024.pdf';
+  sheet.renameSubmit.dispatch('click');
+  const req = last();
+  assert.deepEqual(req, { t: 'files.rename', id: req.id, path: `${HOME}/Docs/report.pdf`, name: 'report-2024.pdf' });
+  sheet.onRenamed({ t: 'files.rename.result', id: req.id, path: req.path, newPath: `${HOME}/Docs/report-2024.pdf` });
+  assert.deepEqual(toasts, ['Renamed to report-2024.pdf']);
+  assert.deepEqual(last(), { t: 'files.search', id: last().id, base: HOME, q: 'rep', hidden: false });
+});
+
+test('rename: Mac errors show their text in the editor, which stays open', () => {
+  const { sheet, last, reply, rowNamed } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  const cases = {
+    exists: 'That name is already used',
+    not_writable: "Can't rename here",
+    not_found: 'It no longer exists',
+    invalid_name: 'Invalid name',
+  };
+  for (const [code, text] of Object.entries(cases)) {
+    sheet.renameInput.value = `n-${code}`;
+    sheet.renameSubmit.dispatch('click');
+    assert.equal(sheet.onError({ t: 'error', id: last().id, code, message: 'x' }), true);
+    assert.equal(sheet.renameError.label, text, code);
+    assert.equal(sheet.renameForm.hidden, false);
+    assert.equal(sheet.renameSubmit.disabled, false);
+  }
+});
+
+test('rename: not connected keeps the editor open with the reason', () => {
+  const { sheet, reply, rowNamed, disconnect } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  sheet.renameButton.dispatch('click');
+  sheet.renameInput.value = 'b.txt';
+  disconnect();
+  sheet.renameSubmit.dispatch('click');
+  assert.equal(sheet.renameError.label, 'Not connected to the Mac');
+  assert.equal(sheet.renameSubmit.disabled, false);
 });
