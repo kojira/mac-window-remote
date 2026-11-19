@@ -3,7 +3,7 @@
 // asks for a one-time URL for exactly the selected paths (`download.request`) and then
 // navigates an <a download> to it, so iOS Safari and desktop browsers save the file.
 // D58: ⬆︎ Upload here (and, on a desktop browser, a drop on the list) uploads files into the
-// folder being shown.
+// folder being shown. D61: ✏️ Rename renames the one selected file or folder in place.
 
 /// "1.5 MB"-style sizes, 1024-based like the 2 GB download cap.
 export function formatSize(bytes) {
@@ -140,6 +140,27 @@ const ERROR_TEXT = {
   bad_request: 'Not a valid path',
 };
 
+/// D61: the texts for a failed `files.rename`.
+const RENAME_ERROR_TEXT = {
+  exists: 'That name is already used',
+  not_writable: "Can't rename here",
+  not_found: 'It no longer exists',
+  invalid_name: 'Invalid name',
+  bad_request: 'Invalid name',
+};
+
+/// D61: the end of the part pre-selected in the rename field: the stem before the last ".",
+/// or the whole name for a folder or a name without an extension (".zshrc", "README").
+export function renameSelectionEnd(name, dir) {
+  const dot = name.lastIndexOf('.');
+  return dir || dot <= 0 ? name.length : dot;
+}
+
+/// D61: a name the Mac would refuse outright ('' if it is fine): empty, containing "/", "." or "..".
+export function renameNameError(name) {
+  return name === '' || name.includes('/') || name === '.' || name === '..' ? 'Invalid name' : '';
+}
+
 function el(tag, className, text) {
   const e = document.createElement(tag);
   if (className) e.className = className;
@@ -160,10 +181,12 @@ export class FileSheet {
   /// connected. download(url, name): start the browser download. storage: where the sort is
   /// remembered (localStorage).
   /// uploader (D58): {busy, upload(files, dest, folderName) → Promise, cancel()}, or null.
-  constructor({ root, send, download, storage = globalThis.localStorage, uploader = null }) {
+  /// toast(text) (D61): a short notice ("Renamed to …").
+  constructor({ root, send, download, storage = globalThis.localStorage, uploader = null, toast = () => {} }) {
     this.root = root;
     this.send = send;
     this.download = download;
+    this.toast = toast;
     this.uploader = uploader;
     this.storage = storage;
     this.sort = parseSort(storage?.getItem(SORT_STORAGE_KEY));
@@ -178,6 +201,8 @@ export class FileSheet {
     this.listId = null;
     this.searchId = null;
     this.downloadId = null;
+    this.renaming = null;  // D61: the entry whose name is being edited
+    this.renameId = null;
     this.baseFollows = true; // "Search in:" tracks the current folder until edited
 
     const panel = el('div', 'menu-panel files-panel');
@@ -260,7 +285,31 @@ export class FileSheet {
     this.bar = el('div', 'files-bar');
     this.summary = el('span', 'files-summary');
     this.downloadButton = button('files-download primary', 'Download', () => this.requestDownload());
-    this.bar.append(this.summary, this.downloadButton);
+    // D61: one selected item can be renamed in an inline editor that replaces the bar's row.
+    this.renameButton = button('files-rename', '✏️ Rename', () => this.startRename(), 'Rename');
+    this.renameForm = el('div', 'files-rename-form');
+    this.renameInput = el('input', 'files-rename-input');
+    this.renameInput.type = 'text';
+    this.renameInput.setAttribute('autocapitalize', 'off');
+    this.renameInput.setAttribute('autocorrect', 'off');
+    this.renameInput.setAttribute('enterkeyhint', 'done');
+    this.renameInput.setAttribute('aria-label', 'New name');
+    this.renameInput.spellcheck = false;
+    this.renameInput.addEventListener('keydown', (e) => {
+      if (e.isComposing) return;
+      if (e.key === 'Enter') { e.preventDefault?.(); this.submitRename(); }
+      else if (e.key === 'Escape') { e.preventDefault?.(); this.cancelRename(); }
+    });
+    this.renameInput.addEventListener('input', () => { if (this.renameError.textContent) this.renameError.textContent = ''; });
+    this.renameError = el('span', 'files-rename-error');
+    this.renameError.setAttribute('role', 'alert');
+    this.renameSubmit = button('files-rename-apply primary', 'Rename', () => this.submitRename());
+    this.renameCancel = button('files-rename-cancel', 'Cancel', () => this.cancelRename());
+    const renameRow = el('div', 'files-rename-row');
+    renameRow.append(this.renameInput, this.renameCancel, this.renameSubmit);
+    this.renameForm.append(renameRow, this.renameError);
+    this.renameForm.hidden = true;
+    this.bar.append(this.summary, this.renameButton, this.downloadButton, this.renameForm);
 
     panel.append(header, this.placesBar, this.sortBar, searchRow, baseRow, this.list, this.bar);
     root.append(panel);
@@ -331,7 +380,8 @@ export class FileSheet {
 
   close() {
     this.root.hidden = true;
-    this.listId = this.searchId = this.downloadId = null;
+    this.listId = this.searchId = this.downloadId = this.renameId = null;
+    this.renaming = null;
     this.list.textContent = '';
   }
 
@@ -437,6 +487,12 @@ export class FileSheet {
     } else if (msg.id === this.downloadId) {
       this.downloadId = null;
       this.barError = text;
+    } else if (msg.id === this.renameId) {
+      // D61: the editor stays open with the reason, so the name can be changed.
+      this.renameId = null;
+      this.renameError.textContent = RENAME_ERROR_TEXT[msg.code] ?? msg.message ?? "Couldn't rename";
+      this.renderBar();
+      return true;
     } else {
       return false;
     }
@@ -459,7 +515,60 @@ export class FileSheet {
     if (this.selected.has(entry.path)) this.selected.delete(entry.path);
     else this.selected.set(entry.path, entry);
     this.barError = '';
+    this.renaming = null;
     this.render();
+  }
+
+  /// D61: opens the name editor for the one selected item. Focus happens inside the tap, so
+  /// iOS shows the keyboard; the stem before the extension is pre-selected.
+  startRename() {
+    if (this.selected.size !== 1 || this.renameId) return;
+    const entry = [...this.selected.values()][0];
+    this.renaming = entry;
+    this.barError = '';
+    this.renameError.textContent = '';
+    this.renameInput.value = entry.name;
+    this.renderBar();
+    this.renameInput.focus?.();
+    this.renameInput.setSelectionRange?.(0, renameSelectionEnd(entry.name, entry.dir));
+  }
+
+  cancelRename() {
+    if (!this.renaming) return;
+    this.renaming = null;
+    this.renameId = null;
+    this.renameInput.blur?.();
+    this.renderBar();
+  }
+
+  /// Checks the name on the device, then sends `files.rename`; an unchanged name just closes.
+  submitRename() {
+    const entry = this.renaming;
+    if (!entry || this.renameId) return;
+    const name = this.renameInput.value;
+    if (name === entry.name) { this.cancelRename(); return; }
+    const invalid = renameNameError(name);
+    if (invalid) { this.renameError.textContent = invalid; return; }
+    this.renameError.textContent = '';
+    this.renameId = this.nextId();
+    if (!this.send({ t: 'files.rename', id: this.renameId, path: entry.path, name })) {
+      this.renameId = null;
+      this.renameError.textContent = 'Not connected to the Mac';
+    }
+    this.renderBar();
+  }
+
+  /// A `files.rename.result` reply; true if it was for this sheet. The listing (or the search)
+  /// is asked for again in the current sort.
+  onRenamed(msg) {
+    if (!msg || msg.id !== this.renameId || typeof msg.newPath !== 'string') return false;
+    this.renameId = null;
+    this.renaming = null;
+    this.selected.clear();
+    this.renameInput.blur?.();
+    this.toast(`Renamed to ${msg.newPath.slice(msg.newPath.lastIndexOf('/') + 1)}`);
+    if (this.found) this.search(); else this.navigate(this.path || '~');
+    return true;
   }
 
   render() {
@@ -534,10 +643,18 @@ export class FileSheet {
 
   renderBar() {
     const items = [...this.selected.values()];
-    this.bar.hidden = items.length === 0 && !this.barError;
+    const editing = this.renaming != null;
+    this.bar.hidden = items.length === 0 && !this.barError && !editing;
+    this.summary.hidden = editing;
     this.summary.textContent = this.barError || selectionSummary(items);
+    this.downloadButton.hidden = editing;
     this.downloadButton.disabled = items.length === 0 || this.downloadId != null;
     this.downloadButton.textContent = this.downloadId ? 'Preparing…' : 'Download';
+    this.renameButton.hidden = editing || items.length !== 1;
+    this.renameForm.hidden = !editing;
+    this.renameInput.disabled = this.renameId != null;
+    this.renameSubmit.disabled = this.renameId != null;
+    this.renameSubmit.textContent = this.renameId ? 'Renaming…' : 'Rename';
   }
 }
 

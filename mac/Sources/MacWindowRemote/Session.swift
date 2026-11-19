@@ -474,6 +474,8 @@ actor Session {
             await prepareDownload(id: id, paths: paths)
         case .filesPutCancel(let id):
             folderFiles.cancel(id: id)
+        case .filesRename(let id, let path, let name):
+            await renameFile(id: id, path: path, name: name)
         }
     }
 
@@ -538,6 +540,29 @@ actor Session {
             await send(.downloadReady(id: id, url: "/download/\(token)", name: plan.fileName, size: size))
         case .failure(let error):
             await sendFileError(error, id: id)
+        }
+    }
+
+    /// D61: renames one item in place; logs carry the code only, never names or paths.
+    private func renameFile(id: String, path: String, name: String) async {
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<String, FileRename.Failure> in
+            Result { () throws(FileRename.Failure) -> String in try FileRename.rename(path: path, to: name) }
+        }.value
+        switch outcome {
+        case .success(let newPath):
+            log.info("files renamed")
+            await send(.filesRenameResult(id: id, path: path, newPath: newPath))
+        case .failure(let failure):
+            log.info("files.rename failed code=\(failure.code.rawValue, privacy: .public)")
+            let message: String
+            switch failure.code {
+            case .exists: message = "That name is already used"
+            case .notWritable: message = "Can't rename here"
+            case .notFound: message = "It no longer exists"
+            case .invalidName, .badRequest: message = "Invalid name"
+            default: message = "Couldn't rename"
+            }
+            await send(.error(code: failure.code, message: message, id: id))
         }
     }
 

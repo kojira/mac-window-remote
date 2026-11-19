@@ -54,6 +54,12 @@ enum ErrorCode: String, Codable {
     case notWritable = "not_writable"
     /// D58: the Mac's disk (or quota) is full.
     case diskFull = "disk_full"
+    /// D61: another item already has the new name.
+    case exists = "exists"
+    /// D61: the new name is not a single path component of 1–255 UTF-8 bytes.
+    case invalidName = "invalid_name"
+    /// D61: the rename failed for another reason.
+    case failed = "failed"
     case `internal` = "internal"
 }
 
@@ -114,6 +120,8 @@ enum ClientMessage: Equatable {
     case downloadRequest(id: String, paths: [String])
     /// D58: stop the `files.put` upload `id` and delete its part file.
     case filesPutCancel(id: String)
+    /// D61: rename the item at the absolute `path` to `name` in the same folder.
+    case filesRename(id: String, path: String, name: String)
 }
 
 /// A desktop mouse button (D45).
@@ -181,6 +189,7 @@ extension ClientMessage {
         let sort: String?
         let desc: Bool?
         let on: Bool?
+        let name: String?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -347,6 +356,10 @@ extension ClientMessage {
             return .downloadRequest(id: try requestId(), paths: paths)
         case "files.put.cancel":
             return .filesPutCancel(id: try requestId())
+        case "files.rename":
+            let path = try require(e.path, "path")
+            guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
+            return .filesRename(id: try requestId(), path: path, name: try require(e.name, "name"))
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -362,7 +375,7 @@ extension ClientMessage {
     var channel: MessageChannel {
         switch self {
         case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .viewFront, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
-             .filesList, .filesSearch, .downloadRequest, .filesPutCancel:
+             .filesList, .filesSearch, .downloadRequest, .filesPutCancel, .filesRename:
             return .socket
         case .move, .scroll, .point: return .motion
         case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio, .mic: return .control
@@ -400,6 +413,7 @@ extension ClientMessage {
         case .filesSearch: return "files.search"
         case .downloadRequest: return "download.request"
         case .filesPutCancel: return "files.put.cancel"
+        case .filesRename: return "files.rename"
         }
     }
 }
@@ -561,6 +575,8 @@ enum ServerMessage {
     case filesFound(id: String, result: FileSearchResult)
     /// A one-time download URL (D47).
     case downloadReady(id: String, url: String, name: String, size: Int64)
+    /// D61: the reply to `files.rename`.
+    case filesRenameResult(id: String, path: String, newPath: String)
     /// Text copied on the Mac (D51); nil text means it was over 1 MiB and is not sent.
     case clipboardMac(seq: Int, text: String?)
 
@@ -603,6 +619,7 @@ enum ServerMessage {
         let truncated: Bool; let timedOut: Bool
     }
     private struct Ready: Encodable { let t = "download.ready"; let id: String; let url: String; let name: String; let size: Int64 }
+    private struct RenameResult: Encodable { let t = "files.rename.result"; let id: String; let path: String; let newPath: String }
     private struct ClipboardMac: Encodable {
         let t = "clipboard.mac"; let seq: Int; let text: String?; let truncated: Bool?
     }
@@ -683,6 +700,8 @@ enum ServerMessage {
                                              truncated: result.truncated, timedOut: result.timedOut))
         case .downloadReady(let id, let url, let name, let size):
             data = try? encoder.encode(Ready(id: id, url: url, name: name, size: size))
+        case .filesRenameResult(let id, let path, let newPath):
+            data = try? encoder.encode(RenameResult(id: id, path: path, newPath: newPath))
         case .clipboardMac(let seq, let text):
             data = try? encoder.encode(ClipboardMac(seq: seq, text: text, truncated: text == nil ? true : nil))
         }

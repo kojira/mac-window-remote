@@ -230,6 +230,17 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .files-summary { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-download { flex: none; padding: 8px 16px; background: #0a84ff; }
 .files-download:disabled { opacity: 0.5; }
+.files-rename { flex: none; padding: 8px 12px; }
+.files-rename-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.files-rename-row { display: flex; gap: 8px; align-items: center; }
+/* 16px keeps iOS Safari from zooming into the field. */
+.files-rename-input { flex: 1; min-width: 0; font-size: 16px; padding: 8px; border-radius: 8px; border: 1px solid #48484a;
+  background: #1c1c1e; color: inherit; }
+.files-rename-apply { flex: none; padding: 8px 14px; background: #0a84ff; }
+.files-rename-apply:disabled { opacity: 0.5; }
+.files-rename-cancel { flex: none; padding: 8px 12px; }
+.files-rename-error { color: #ff6961; font-size: 13px; }
+.files-rename-error:empty { display: none; }
 
 #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 56px);
   max-width: 90%; background: rgba(60, 60, 60, 0.95); padding: 10px 14px; border-radius: 10px; z-index: 10; font-size: 14px; }

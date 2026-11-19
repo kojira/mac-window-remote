@@ -2535,3 +2535,29 @@ Setup: BlackHole installed on the Mac; a meeting test page (or any app with a mi
 3. ⧉ is not shown for a window and is hidden while typing.
 4. *PC browser:* the same with the mouse.
 5. *Unit:* `FrontWindowTests` (front app's window on the display, front app elsewhere → topmost here, centre rule, none, layer and size filtering, our own window excluded, `view.front` decoding and `view.front.result` encoding), `SessionDisplayTests` (`view.front` through the real server leaves the display view as is); `tests/web/displays.test.mjs` (⧉ only for a display and hidden while typing, the message, the result to the pick path, the no-window toast).
+
+## 38. Rename a file or folder in the Files sheet (user decision D61, Issue #60; amends D47, D58)
+
+### D61. ✏️ Rename for one selected item
+
+- **Entry.** In the ⬇︎⬆︎ Files sheet, with exactly one item checked (a file or a folder; folders are selected with their checkbox, D47), the bottom bar shows **✏️ Rename** next to Download. It works on listing and search results alike.
+- **Editor.** The tap replaces the bar's row with a text field holding the current name, **Cancel** and **Rename**. The field is focused inside the tap (so iOS shows the keyboard) and the stem before the last "." is selected; for a folder, or a name without an extension (".zshrc", "README"), the whole name. Return (outside IME composition) renames, Esc cancels. Changing the extension is allowed without a prompt.
+- **Device checks.** Empty, containing "/", "." or ".." → "Invalid name" under the field; nothing is sent. An unchanged name just closes the editor.
+- **Wire.** `{"t":"files.rename","id":"r1","path":"/abs/old","name":"new"}` on the authenticated `/ws`. Reply `{"t":"files.rename.result","id","path","newPath"}` or `{"t":"error","id","code":"exists|not_writable|not_found|invalid_name|bad_request|failed","message"}`.
+- **Page after the reply.** Success: toast "Renamed to <name>", the selection is cleared, and the folder is listed again in the current sort (D55) — or, on search results, the search runs again. Failure: the editor stays open with "That name is already used" (exists), "Can't rename here" (not_writable), "It no longer exists" (not_found), or "Invalid name" (invalid_name, bad_request).
+- **Mac (`FileRename`).**
+  - The source is an absolute path (standardized, not `/`) that `lstat` finds; a symlink itself is renamed, not its target.
+  - The name is one path component: no "/", no NUL, not "." or "..", 1–255 UTF-8 bytes. Leading dots are kept (renaming to a dotfile is allowed); no D42 sanitizing.
+  - The destination is the same folder + name, renamed with `renamex_np(RENAME_EXCL)`, so an existing item is never replaced (`exists`). A case-only change on a case-insensitive volume ("a.txt" → "A.txt") fails `EEXIST` there; when the destination is the same inode (same `st_dev`/`st_ino`) and the names differ only in case, a plain `rename` is done.
+  - errno: `EACCES`/`EPERM`/`EROFS` → `not_writable`, `ENOENT` → `not_found`, `EEXIST`/`ENOTEMPTY` → `exists`, else `failed`. Logs carry the code, never names or paths.
+- **Source changes:** `FileRename.swift`, `Protocol.swift` (`filesRename`, `filesRenameResult`, `exists`, `invalid_name`, `failed`), `Session.swift`; `web/files.js` (button, editor, `renameSelectionEnd`, `renameNameError`, `onRenamed`), `web/app.js`, `web/style.css`.
+
+### D61 acceptance criteria
+1. *iPhone (Safari or Home Screen):* ⋯ → ⬇︎⬆︎ Files → check one file → ✏️ Rename: the keyboard appears with the name's stem selected; type a new name → Return (or Rename): toast "Renamed to <name>", the bar closes, and the list shows the new name in the current sort.
+2. Checking two items hides ✏️ Rename; one folder shows it and selects the whole name.
+3. Renaming to the name of another item in the folder shows "That name is already used" and changes nothing. "a.txt" → "A.txt" works.
+4. An empty name, "/", "." or ".." shows "Invalid name" without asking the Mac; an unchanged name just closes the editor; Cancel closes it.
+5. In a read-only folder (e.g. `/System`) the editor shows "Can't rename here". An item deleted on the Mac meanwhile shows "It no longer exists".
+6. From search results, the renamed item shows its new name after the search runs again.
+7. *PC browser:* the same with the mouse and keyboard; Return renames and Esc cancels.
+8. *Unit:* `FileRenameTests` (file, folder with contents, exists → no overwrite of a file or a folder, case-only rename, a hard link or another case variant is still exists, invalid names, dotfile allowed, not found, bad path, symlink itself renamed (also broken), read-only folder via chmod 0555, errno mapping, `files.rename` decoding and `files.rename.result` encoding); `tests/web/files.test.mjs` (button only with one selection, stem pre-selection, focus in the tap, Esc/Cancel, device validation, unchanged name, the message, success toast and refresh in the current sort, re-run search, error texts, not connected).
