@@ -60,6 +60,10 @@ enum ErrorCode: String, Codable {
     case invalidName = "invalid_name"
     /// D61: the rename failed for another reason.
     case failed = "failed"
+    /// D62: not a regular UTF-8 text file (also a NUL byte), so it is not opened in the editor.
+    case notText = "not_text"
+    /// D62: the file changed on the Mac since the editor read it.
+    case conflict = "conflict"
     case `internal` = "internal"
 }
 
@@ -122,6 +126,10 @@ enum ClientMessage: Equatable {
     case filesPutCancel(id: String)
     /// D61: rename the item at the absolute `path` to `name` in the same folder.
     case filesRename(id: String, path: String, name: String)
+    /// D62: create the empty file `name` in the folder `dir`.
+    case filesCreate(id: String, dir: String, name: String)
+    /// D62: read the text file at `path` for the editor.
+    case filesRead(id: String, path: String)
 }
 
 /// A desktop mouse button (D45).
@@ -190,6 +198,7 @@ extension ClientMessage {
         let desc: Bool?
         let on: Bool?
         let name: String?
+        let dir: String?
     }
 
     /// Decodes a message and checks that `channel` carries its type (D22, D28).
@@ -360,6 +369,14 @@ extension ClientMessage {
             let path = try require(e.path, "path")
             guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
             return .filesRename(id: try requestId(), path: path, name: try require(e.name, "name"))
+        case "files.create":
+            let dir = try require(e.dir, "dir")
+            guard dir.hasPrefix("/"), dir.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("dir") }
+            return .filesCreate(id: try requestId(), dir: dir, name: try require(e.name, "name"))
+        case "files.read":
+            let path = try require(e.path, "path")
+            guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
+            return .filesRead(id: try requestId(), path: path)
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -375,7 +392,8 @@ extension ClientMessage {
     var channel: MessageChannel {
         switch self {
         case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .viewFront, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
-             .filesList, .filesSearch, .downloadRequest, .filesPutCancel, .filesRename:
+             .filesList, .filesSearch, .downloadRequest, .filesPutCancel, .filesRename,
+             .filesCreate, .filesRead:
             return .socket
         case .move, .scroll, .point: return .motion
         case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio, .mic: return .control
@@ -414,6 +432,8 @@ extension ClientMessage {
         case .downloadRequest: return "download.request"
         case .filesPutCancel: return "files.put.cancel"
         case .filesRename: return "files.rename"
+        case .filesCreate: return "files.create"
+        case .filesRead: return "files.read"
         }
     }
 }
@@ -435,6 +455,9 @@ enum BinaryClientMessage: Equatable {
     /// D58: one chunk of a file uploaded into the folder `dest`; `name` and `dest` are set on
     /// the chunk at offset 0 and empty on the others.
     case filesPut(id: String, size: Int, offset: Int, bytes: Data, name: String, dest: String)
+    /// D62: save the editor's `text` ("\n" line endings) over the file at `path`. A binary
+    /// message, since 1 MiB of text JSON-escaped would not fit the frame.
+    case filesWrite(FileWriteRequest)
 
     /// Clipboard text is at most 1 MiB of UTF-8 (D11).
     static let maxClipboardBytes = 1 << 20
@@ -450,6 +473,11 @@ enum BinaryClientMessage: Equatable {
         let offset: Int?
         let name: String?
         let dest: String?
+        let path: String?
+        let baseMtime: Double?
+        let baseSize: Int64?
+        let eol: String?
+        let force: Bool?
     }
 
     /// Decodes the framing, the header, and its values. A clipboard payload over 1 MiB throws
@@ -489,10 +517,32 @@ enum BinaryClientMessage: Equatable {
                                  name: first ? h.name ?? "" : "", dest: first ? h.dest ?? "" : "")
             }
             return .fileChunk(id: id, size: size, offset: offset, bytes: payload, name: offset == 0 ? h.name ?? "" : "")
+        case "files.write":
+            guard payload.count <= FileEdit.maxTextBytes else { throw UploadRejection(id: id, code: .tooLarge) }
+            guard let path = h.path, path.hasPrefix("/"), path.utf8.count <= ClientMessage.maxPathBytes else {
+                throw ProtocolError.invalidValue("path")
+            }
+            guard let baseMtime = h.baseMtime, baseMtime.isFinite else { throw ProtocolError.invalidValue("baseMtime") }
+            guard let baseSize = h.baseSize, baseSize >= 0 else { throw ProtocolError.invalidValue("baseSize") }
+            guard let eol = FileEdit.LineEnding(rawValue: h.eol ?? "lf") else { throw ProtocolError.invalidValue("eol") }
+            guard let text = FileEdit.utf8String(payload) else { throw ProtocolError.invalidValue("text") }
+            return .filesWrite(FileWriteRequest(id: id, path: path, text: text, baseMtime: baseMtime, baseSize: baseSize,
+                                                eol: eol, force: h.force ?? false))
         default:
             throw ProtocolError.unknownType(h.t)
         }
     }
+}
+
+/// D62: a `files.write` from the editor; `baseMtime`/`baseSize` are what it read or last saved.
+struct FileWriteRequest: Equatable, Sendable {
+    let id: String
+    let path: String
+    let text: String
+    let baseMtime: Double
+    let baseSize: Int64
+    let eol: FileEdit.LineEnding
+    let force: Bool
 }
 
 /// A request rejected with a specific error code and its id (D36).
@@ -577,6 +627,12 @@ enum ServerMessage {
     case downloadReady(id: String, url: String, name: String, size: Int64)
     /// D61: the reply to `files.rename`.
     case filesRenameResult(id: String, path: String, newPath: String)
+    /// D62: the reply to `files.create`; `path` is the new empty file.
+    case filesCreateResult(id: String, path: String)
+    /// D62: the reply to `files.read`.
+    case filesReadResult(id: String, path: String, contents: FileEdit.Contents)
+    /// D62: the reply to `files.write`.
+    case filesWriteResult(id: String, path: String, saved: FileEdit.Saved)
     /// Text copied on the Mac (D51); nil text means it was over 1 MiB and is not sent.
     case clipboardMac(seq: Int, text: String?)
 
@@ -620,6 +676,12 @@ enum ServerMessage {
     }
     private struct Ready: Encodable { let t = "download.ready"; let id: String; let url: String; let name: String; let size: Int64 }
     private struct RenameResult: Encodable { let t = "files.rename.result"; let id: String; let path: String; let newPath: String }
+    private struct CreateResult: Encodable { let t = "files.create.result"; let id: String; let path: String }
+    private struct ReadResult: Encodable {
+        let t = "files.read.result"; let id: String; let path: String; let text: String; let mtime: Double
+        let size: Int64; let eol: String
+    }
+    private struct WriteResult: Encodable { let t = "files.write.result"; let id: String; let path: String; let mtime: Double; let size: Int64 }
     private struct ClipboardMac: Encodable {
         let t = "clipboard.mac"; let seq: Int; let text: String?; let truncated: Bool?
     }
@@ -702,6 +764,12 @@ enum ServerMessage {
             data = try? encoder.encode(Ready(id: id, url: url, name: name, size: size))
         case .filesRenameResult(let id, let path, let newPath):
             data = try? encoder.encode(RenameResult(id: id, path: path, newPath: newPath))
+        case .filesCreateResult(let id, let path):
+            data = try? encoder.encode(CreateResult(id: id, path: path))
+        case .filesReadResult(let id, let path, let c):
+            data = try? encoder.encode(ReadResult(id: id, path: path, text: c.text, mtime: c.mtime, size: c.size, eol: c.eol.rawValue))
+        case .filesWriteResult(let id, let path, let saved):
+            data = try? encoder.encode(WriteResult(id: id, path: path, mtime: saved.mtime, size: saved.size))
         case .clipboardMac(let seq, let text):
             data = try? encoder.encode(ClipboardMac(seq: seq, text: text, truncated: text == nil ? true : nil))
         }
