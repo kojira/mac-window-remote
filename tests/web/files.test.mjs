@@ -52,12 +52,14 @@ function fakeStorage(initial = {}) {
   return { data, getItem: (k) => (k in data ? data[k] : null), setItem: (k, v) => { data[k] = String(v); } };
 }
 
-function setup(storage = fakeStorage(), { uploader = null } = {}) {
+function setup(storage = fakeStorage(), { uploader = null, confirm = () => true } = {}) {
   const root = new FakeElement('div');
   root.hidden = true;
   const sent = [];
   const downloads = [];
   const toasts = [];
+  const binary = [];
+  const confirms = [];
   let connected = true;
   const sheet = new FileSheet({
     root,
@@ -66,6 +68,9 @@ function setup(storage = fakeStorage(), { uploader = null } = {}) {
     storage,
     uploader,
     toast: (t) => toasts.push(t),
+    sendBinary: (b) => { if (connected) binary.push(b); return connected; },
+    confirm: (text) => { confirms.push(text); return confirm(text); },
+    viewport: null,
   });
   const last = () => sent[sent.length - 1];
   const rows = () => sheet.list.children.filter((c) => c.className.startsWith('files-row'));
@@ -74,7 +79,10 @@ function setup(storage = fakeStorage(), { uploader = null } = {}) {
   const reply = (entries = LISTING, extra = {}) => sheet.onFiles({
     t: 'files', id: last().id, path: HOME, entries, total: entries.length, truncated: false, places: PLACES, ...extra,
   });
-  return { storage, root, sheet, sent, downloads, toasts, last, rows, notes, rowNamed, reply, disconnect: () => { connected = false; } };
+  return {
+    storage, root, sheet, sent, downloads, toasts, binary, confirms, last, rows, notes, rowNamed, reply,
+    disconnect: () => { connected = false; },
+  };
 }
 
 test('helpers: sizes, parent paths, breadcrumbs, and the selection summary', () => {
@@ -588,4 +596,293 @@ test('rename: not connected keeps the editor open with the reason', () => {
   sheet.renameSubmit.dispatch('click');
   assert.equal(sheet.renameError.label, 'Not connected to the Mac');
   assert.equal(sheet.renameSubmit.disabled, false);
+});
+
+// D62: ＋ New file (the shared name editor in create mode) and ✏️ Edit (the text editor).
+
+/// [header, text] of a `files.write` binary message.
+function decodeWrite(bytes) {
+  const n = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
+  const header = JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + n)));
+  return [header, new TextDecoder().decode(bytes.subarray(4 + n))];
+}
+
+/// Opens a.txt in the editor and answers the read.
+function openEditor(ctx, { text = 'hello\n', mtime = 1700000000123.4567, size = 6, eol = 'lf' } = {}) {
+  const { sheet, last, reply, rowNamed } = ctx;
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  sheet.editButton.dispatch('click');
+  const req = last();
+  assert.deepEqual(req, { t: 'files.read', id: req.id, path: `${HOME}/a.txt` });
+  assert.equal(sheet.editor.onRead({ t: 'files.read.result', id: req.id, path: req.path, text, mtime, size, eol }), true);
+  return req;
+}
+
+const type = (editor, text) => { editor.text.value = text; editor.text.dispatch('input'); };
+
+test('New file: next to Upload here, enabled under the same conditions', () => {
+  const { sheet, last, reply } = setup(fakeStorage(), { uploader: fakeUploader() });
+  sheet.open();
+  assert.equal(sheet.sortBar.children.indexOf(sheet.newFileButton) + 1, sheet.sortBar.children.indexOf(sheet.uploadButton));
+  assert.equal(sheet.newFileButton.label, '＋ New file');
+  assert.equal(sheet.newFileButton.disabled, true, 'loading');
+  reply();
+  assert.equal(sheet.newFileButton.disabled, false);
+  sheet.query.value = 'a';
+  sheet.search();
+  assert.equal(sheet.newFileButton.disabled, true, 'search results');
+  sheet.clearSearch();
+  sheet.navigate('/');
+  sheet.onFiles({ t: 'files', id: last().id, path: '/', entries: [], places: PLACES });
+  assert.equal(sheet.newFileButton.disabled, true, 'the Computer root');
+  sheet.newFileButton.dispatch('click');
+  assert.equal(sheet.renameForm.hidden, true, 'a disabled tap does nothing');
+});
+
+test('New file: the shared name editor starts at untitled.txt with "untitled" selected; Create sends files.create', () => {
+  const { sheet, sent, last, reply, toasts } = setup(fakeStorage(), { uploader: fakeUploader() });
+  sheet.open();
+  reply();
+  sheet.newFileButton.dispatch('click');
+  assert.equal(sheet.renameForm.hidden, false);
+  assert.equal(sheet.bar.hidden, false, 'the bar shows without a selection');
+  assert.equal(sheet.renameInput.value, 'untitled.txt');
+  assert.deepEqual(sheet.renameInput.selection, [0, 8]);
+  assert.equal(FakeElement.focused, sheet.renameInput, 'focused within the tap (iOS keyboard)');
+  assert.equal(sheet.renameSubmit.label, 'Create');
+  assert.equal(sheet.renameButton.hidden, true);
+  // The same device checks as rename.
+  const before = sent.length;
+  sheet.renameInput.value = 'a/b';
+  sheet.renameSubmit.dispatch('click');
+  assert.equal(sheet.renameError.label, 'Invalid name');
+  assert.equal(sent.length, before);
+  // Esc cancels.
+  sheet.renameInput.dispatch('keydown', { key: 'Escape' });
+  assert.equal(sheet.renameForm.hidden, true);
+
+  sheet.newFileButton.dispatch('click');
+  sheet.renameInput.value = 'notes.md';
+  sheet.renameInput.dispatch('keydown', { key: 'Enter' });
+  const req = last();
+  assert.deepEqual(req, { t: 'files.create', id: req.id, dir: HOME, name: 'notes.md' });
+  assert.equal(sheet.renameSubmit.label, 'Creating…');
+  // Taken: the editor stays open with the reason.
+  assert.equal(sheet.onError({ t: 'error', id: req.id, code: 'exists', message: 'x' }), true);
+  assert.equal(sheet.renameError.label, 'That name is already used');
+  assert.equal(sheet.renameForm.hidden, false);
+  sheet.renameInput.value = 'notes2.md';
+  sheet.renameSubmit.dispatch('click');
+  const req2 = last();
+  assert.equal(sheet.onCreated({ t: 'files.create.result', id: 'other', path: `${HOME}/x` }), false);
+  assert.equal(sheet.onCreated({ t: 'files.create.result', id: req2.id, path: `${HOME}/notes2.md` }), true);
+  assert.equal(sheet.renameForm.hidden, true);
+  // Listed again, and the new file opens in the editor.
+  assert.deepEqual(sent.at(-2), { t: 'files.list', id: sent.at(-2).id, path: HOME, hidden: false, sort: 'mtime', desc: true });
+  assert.deepEqual(last(), { t: 'files.read', id: last().id, path: `${HOME}/notes2.md` });
+  assert.equal(sheet.editor.isOpen, true);
+  assert.equal(sheet.editor.title.label, 'notes2.md');
+  assert.deepEqual(toasts, []);
+});
+
+test('Edit: shown only with exactly one file selected, next to Rename; Download stays', () => {
+  const { sheet, reply, rowNamed } = setup();
+  sheet.open();
+  reply();
+  rowNamed('a.txt').children[0].dispatch('change');
+  assert.equal(sheet.editButton.hidden, false);
+  assert.equal(sheet.editButton.label, '✏️ Edit');
+  assert.equal(sheet.bar.children.indexOf(sheet.editButton) + 1, sheet.bar.children.indexOf(sheet.renameButton));
+  assert.equal(sheet.downloadButton.hidden, false);
+  rowNamed('b.bin').children[0].dispatch('change');
+  assert.equal(sheet.editButton.hidden, true, 'two selected');
+  rowNamed('a.txt').children[0].dispatch('change');
+  rowNamed('b.bin').children[0].dispatch('change');
+  rowNamed('Docs').children[0].dispatch('change');
+  assert.equal(sheet.editButton.hidden, true, 'a folder');
+  assert.equal(sheet.renameButton.hidden, false);
+});
+
+test('Edit: the editor shows the name, a plain monospace textarea, and the unsaved marker', () => {
+  const ctx = setup();
+  openEditor(ctx);
+  const { editor } = ctx.sheet;
+  assert.equal(editor.isOpen, true);
+  assert.equal(editor.title.label, 'a.txt');
+  assert.equal(editor.text.tag, 'textarea');
+  assert.equal(editor.text.attrs.autocapitalize, 'off');
+  assert.equal(editor.text.attrs.autocorrect, 'off');
+  assert.equal(editor.text.spellcheck, false);
+  assert.equal(editor.text.value, 'hello\n');
+  assert.equal(editor.marker.label, '');
+  type(editor, 'hello world\n');
+  assert.equal(editor.marker.label, ' •');
+  type(editor, 'hello\n');
+  assert.equal(editor.marker.label, '', 'back to the saved text');
+});
+
+test('Edit: Close and Esc confirm "Discard changes?" only with unsaved changes', () => {
+  let answer = false;
+  const ctx = setup(fakeStorage(), { confirm: () => answer });
+  openEditor(ctx);
+  const { editor } = ctx.sheet;
+  editor.closeButton.dispatch('click');
+  assert.equal(editor.isOpen, false, 'nothing changed: closes at once');
+  assert.deepEqual(ctx.confirms, []);
+  openEditor(ctx);
+  type(editor, 'changed');
+  editor.closeButton.dispatch('click');
+  assert.deepEqual(ctx.confirms, ['Discard changes?']);
+  assert.equal(editor.isOpen, true, 'declined');
+  answer = true;
+  editor.text.dispatch('keydown', { key: 'Escape' });
+  assert.deepEqual(ctx.confirms, ['Discard changes?', 'Discard changes?']);
+  assert.equal(editor.isOpen, false);
+  // A tap on the backdrop asks too.
+  answer = false;
+  openEditor(ctx);
+  type(editor, 'changed');
+  ctx.root.dispatch('click');
+  assert.equal(editor.isOpen, true);
+  assert.equal(ctx.sheet.isOpen, true);
+});
+
+test('Edit: Save sends files.write with the base; the reply clears the marker, toasts, and is the next base', () => {
+  const ctx = setup();
+  openEditor(ctx, { eol: 'crlf' });
+  const { editor } = ctx.sheet;
+  type(editor, 'héllo\n');
+  editor.saveButton.dispatch('click');
+  const [h, text] = decodeWrite(ctx.binary[0]);
+  assert.deepEqual(h, { t: 'files.write', id: h.id, path: `${HOME}/a.txt`, baseMtime: 1700000000123.4567, baseSize: 6, eol: 'crlf' });
+  assert.equal(text, 'héllo\n');
+  assert.equal(editor.saveButton.label, 'Saving…');
+  assert.equal(editor.saveButton.disabled, true);
+  assert.equal(editor.onWritten({ t: 'files.write.result', id: h.id, path: h.path, mtime: 42.5, size: 8 }), true);
+  assert.equal(editor.marker.label, '');
+  assert.deepEqual(ctx.toasts, ['Saved']);
+  type(editor, 'again');
+  editor.saveButton.dispatch('click');
+  const [h2] = decodeWrite(ctx.binary[1]);
+  assert.equal(h2.baseMtime, 42.5);
+  assert.equal(h2.baseSize, 8);
+  // After a save, closing lists the folder again.
+  editor.onWritten({ t: 'files.write.result', id: h2.id, path: h2.path, mtime: 43, size: 5 });
+  const before = ctx.sent.length;
+  editor.closeButton.dispatch('click');
+  assert.equal(ctx.sent.length, before + 1);
+  assert.equal(ctx.last().t, 'files.list');
+});
+
+test('Edit: a conflict asks "Changed on the Mac. Overwrite?"; OK resends with force', () => {
+  let answer = false;
+  const ctx = setup(fakeStorage(), { confirm: () => answer });
+  openEditor(ctx);
+  const { editor } = ctx.sheet;
+  type(editor, 'mine');
+  editor.saveButton.dispatch('click');
+  let [h] = decodeWrite(ctx.binary[0]);
+  assert.equal(ctx.sheet.onError({ t: 'error', id: h.id, code: 'conflict', message: 'x' }), true);
+  assert.deepEqual(ctx.confirms, ['Changed on the Mac. Overwrite?']);
+  assert.equal(ctx.binary.length, 1, 'declined: not sent');
+  assert.equal(editor.marker.label, ' •', 'still unsaved');
+  answer = true;
+  editor.saveButton.dispatch('click');
+  [h] = decodeWrite(ctx.binary[1]);
+  ctx.sheet.onError({ t: 'error', id: h.id, code: 'conflict', message: 'x' });
+  const [forced, text] = decodeWrite(ctx.binary[2]);
+  assert.equal(forced.force, true);
+  assert.equal(text, 'mine');
+  assert.equal(h.force, undefined);
+});
+
+test('Edit: ⌘S and Ctrl+S save; other keys do not', () => {
+  const ctx = setup();
+  openEditor(ctx);
+  const { editor } = ctx.sheet;
+  type(editor, 'x');
+  let prevented = 0;
+  const key = (extra) => editor.text.dispatch('keydown', { preventDefault: () => { prevented += 1; }, ...extra });
+  key({ key: 's' });
+  assert.equal(ctx.binary.length, 0);
+  key({ key: 's', metaKey: true });
+  assert.equal(ctx.binary.length, 1);
+  assert.equal(prevented, 1, 'the browser\'s Save Page is stopped');
+  const [h] = decodeWrite(ctx.binary[0]);
+  editor.onWritten({ t: 'files.write.result', id: h.id, path: h.path, mtime: 1, size: 1 });
+  type(editor, 'y');
+  key({ key: 's', ctrlKey: true });
+  assert.equal(ctx.binary.length, 2);
+});
+
+test('Edit: error texts for read and save', () => {
+  const read = {
+    too_large: 'Too large to edit (over 1 MB)',
+    not_text: "Can't edit this file (not text)",
+    not_found: 'It no longer exists',
+  };
+  for (const [code, text] of Object.entries(read)) {
+    const ctx = setup();
+    ctx.sheet.open();
+    ctx.reply();
+    ctx.rowNamed('a.txt').children[0].dispatch('change');
+    ctx.sheet.editButton.dispatch('click');
+    assert.equal(ctx.sheet.onError({ t: 'error', id: ctx.last().id, code, message: 'x' }), true);
+    assert.deepEqual(ctx.toasts, [text], code);
+    assert.equal(ctx.sheet.editor.isOpen, false, 'nothing loaded: closed');
+  }
+  const save = { not_writable: "Can't save here", not_found: 'It no longer exists', too_large: 'Too large to edit (over 1 MB)' };
+  for (const [code, text] of Object.entries(save)) {
+    const ctx = setup();
+    openEditor(ctx);
+    type(ctx.sheet.editor, 'x');
+    ctx.sheet.editor.saveButton.dispatch('click');
+    const [h] = decodeWrite(ctx.binary[0]);
+    ctx.sheet.onError({ t: 'error', id: h.id, code, message: 'x' });
+    assert.deepEqual(ctx.toasts, [text], code);
+    assert.equal(ctx.sheet.editor.isOpen, true, 'the text stays');
+    assert.equal(ctx.sheet.editor.saveButton.disabled, false);
+  }
+});
+
+test('Edit: over 1 MiB (counting CRLF) is refused on the device; a lost connection keeps the text', async () => {
+  const { savedByteLength, EDIT_MAX_BYTES } = await import('../../web/fileeditor.js');
+  assert.equal(savedByteLength('a\nb\n', 'lf'), 4);
+  assert.equal(savedByteLength('a\nb\n', 'crlf'), 6);
+  assert.equal(savedByteLength('é', 'lf'), 2);
+  const ctx = setup();
+  openEditor(ctx, { eol: 'crlf' });
+  const { editor } = ctx.sheet;
+  type(editor, '\n'.repeat(EDIT_MAX_BYTES / 2 + 1));
+  editor.saveButton.dispatch('click');
+  assert.equal(ctx.binary.length, 0);
+  assert.deepEqual(ctx.toasts, ['Too large to edit (over 1 MB)']);
+  type(editor, 'ok');
+  editor.saveButton.dispatch('click');
+  editor.abandon();
+  assert.equal(ctx.toasts.at(-1), 'Not saved — connection lost');
+  assert.equal(editor.isOpen, true);
+  assert.equal(editor.saveButton.disabled, false);
+  assert.equal(editor.text.value, 'ok');
+});
+
+test('Edit: the editor follows the visual viewport (iOS keyboard)', async () => {
+  const { FileEditor } = await import('../../web/fileeditor.js');
+  const listeners = {};
+  const viewport = { height: 800, offsetTop: 0, addEventListener: (t, fn) => { listeners[t] = fn; } };
+  const parent = new FakeElement('div');
+  const sent = [];
+  const editor = new FileEditor({
+    parent, send: (m) => { sent.push(m); return true; }, sendBinary: () => true, nextId: () => 'e1',
+    toast: () => {}, confirm: () => true, viewport,
+  });
+  editor.open('/x/a.txt', 'a.txt');
+  assert.equal(editor.root.style.height, '800px');
+  viewport.height = 420;
+  viewport.offsetTop = 30;
+  listeners.resize();
+  assert.equal(editor.root.style.height, '420px');
+  assert.equal(editor.root.style.top, '30px');
 });

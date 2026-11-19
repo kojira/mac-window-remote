@@ -4,6 +4,9 @@
 // navigates an <a download> to it, so iOS Safari and desktop browsers save the file.
 // D58: ⬆︎ Upload here (and, on a desktop browser, a drop on the list) uploads files into the
 // folder being shown. D61: ✏️ Rename renames the one selected file or folder in place.
+// D62: ＋ New file creates an empty file through the same name editor, and ✏️ Edit opens the
+// one selected file in a plain-text editor (fileeditor.js).
+import { FileEditor, editErrorText } from './fileeditor.js';
 
 /// "1.5 MB"-style sizes, 1024-based like the 2 GB download cap.
 export function formatSize(bytes) {
@@ -149,6 +152,9 @@ const RENAME_ERROR_TEXT = {
   bad_request: 'Invalid name',
 };
 
+/// D62: the name the New file editor starts with; "untitled" is pre-selected.
+export const NEW_FILE_NAME = 'untitled.txt';
+
 /// D61: the end of the part pre-selected in the rename field: the stem before the last ".",
 /// or the whole name for a folder or a name without an extension (".zshrc", "README").
 export function renameSelectionEnd(name, dir) {
@@ -182,7 +188,12 @@ export class FileSheet {
   /// remembered (localStorage).
   /// uploader (D58): {busy, upload(files, dest, folderName) → Promise, cancel()}, or null.
   /// toast(text) (D61): a short notice ("Renamed to …").
-  constructor({ root, send, download, storage = globalThis.localStorage, uploader = null, toast = () => {} }) {
+  /// sendBinary(bytes) (D62): a binary socket message (the editor's save), false if not
+  /// connected. confirm(text) → boolean (D62): "Discard changes?", "Changed on the Mac. Overwrite?".
+  constructor({
+    root, send, download, storage = globalThis.localStorage, uploader = null, toast = () => {},
+    sendBinary = () => false, confirm = (text) => globalThis.confirm?.(text) ?? true, viewport,
+  }) {
     this.root = root;
     this.send = send;
     this.download = download;
@@ -201,8 +212,9 @@ export class FileSheet {
     this.listId = null;
     this.searchId = null;
     this.downloadId = null;
-    this.renaming = null;  // D61: the entry whose name is being edited
-    this.renameId = null;
+    // D61/D62: the name editor in the bar: {mode: 'rename', entry} or {mode: 'create', dir}.
+    this.nameEdit = null;
+    this.renameId = null;  // the pending files.rename or files.create
     this.baseFollows = true; // "Search in:" tracks the current folder until edited
 
     const panel = el('div', 'menu-panel files-panel');
@@ -220,6 +232,8 @@ export class FileSheet {
       this.sortButtons[key] = button('files-sort-key', SORT_LABELS[key], () => this.setSort(key));
       this.sortBar.append(this.sortButtons[key]);
     }
+    // D62: a new empty file in the folder shown, named in the bar's name editor.
+    this.newFileButton = button('files-new', '＋ New file', () => this.startCreate());
     // D58: upload into the folder shown; while uploading it cancels instead.
     this.uploadButton = button('files-upload', '⬆︎ Upload here', () => this.uploadPressed());
     this.filePicker = el('input', 'files-picker');
@@ -232,7 +246,7 @@ export class FileSheet {
       this.filePicker.value = '';
       this.uploadFiles(files);
     });
-    this.sortBar.append(this.uploadButton, this.filePicker);
+    this.sortBar.append(this.newFileButton, this.uploadButton, this.filePicker);
 
     const searchRow = el('div', 'files-search');
     this.query = el('input', 'files-query');
@@ -286,7 +300,9 @@ export class FileSheet {
     this.summary = el('span', 'files-summary');
     this.downloadButton = button('files-download primary', 'Download', () => this.requestDownload());
     // D61: one selected item can be renamed in an inline editor that replaces the bar's row.
+    // D62: the same editor names a new file; one selected file can be edited.
     this.renameButton = button('files-rename', '✏️ Rename', () => this.startRename(), 'Rename');
+    this.editButton = button('files-edit', '✏️ Edit', () => this.startEdit(), 'Edit');
     this.renameForm = el('div', 'files-rename-form');
     this.renameInput = el('input', 'files-rename-input');
     this.renameInput.type = 'text';
@@ -309,12 +325,20 @@ export class FileSheet {
     renameRow.append(this.renameInput, this.renameCancel, this.renameSubmit);
     this.renameForm.append(renameRow, this.renameError);
     this.renameForm.hidden = true;
-    this.bar.append(this.summary, this.renameButton, this.downloadButton, this.renameForm);
+    this.bar.append(this.summary, this.editButton, this.renameButton, this.downloadButton, this.renameForm);
 
     panel.append(header, this.placesBar, this.sortBar, searchRow, baseRow, this.list, this.bar);
     root.append(panel);
     this.panel = panel;
-    root.addEventListener('click', (e) => { if (e.target === root) this.close(); });
+    // D62: the text editor covers the panel.
+    this.editor = new FileEditor({ parent: panel, send, sendBinary, nextId: () => this.nextId(), toast, confirm, viewport });
+    this.editor.onClosed = (saved) => { if (saved && this.isOpen) this.relist(); };
+    root.addEventListener('click', (e) => { if (e.target === root && this.editor.requestClose()) this.close(); });
+  }
+
+  /// Lists the folder again, or runs the search again, in the current sort.
+  relist() {
+    if (this.found) this.search(); else this.navigate(this.path || '~');
   }
 
   get isOpen() { return !this.root.hidden; }
@@ -362,6 +386,8 @@ export class FileSheet {
     this.uploadButton.disabled = !busy && this.uploadTarget() == null;
     const target = this.uploadTarget();
     this.uploadButton.setAttribute('aria-label', busy ? 'Cancel upload' : target ? `Upload files to ${target.name}` : 'Upload here');
+    this.newFileButton.hidden = !this.uploader;
+    this.newFileButton.disabled = target == null;
   }
 
   nextId() {
@@ -381,7 +407,8 @@ export class FileSheet {
   close() {
     this.root.hidden = true;
     this.listId = this.searchId = this.downloadId = this.renameId = null;
-    this.renaming = null;
+    this.nameEdit = null;
+    this.editor.close();
     this.list.textContent = '';
   }
 
@@ -488,13 +515,14 @@ export class FileSheet {
       this.downloadId = null;
       this.barError = text;
     } else if (msg.id === this.renameId) {
-      // D61: the editor stays open with the reason, so the name can be changed.
+      // D61/D62: the name editor stays open with the reason, so the name can be changed.
       this.renameId = null;
-      this.renameError.textContent = RENAME_ERROR_TEXT[msg.code] ?? msg.message ?? "Couldn't rename";
+      this.renameError.textContent = this.nameEdit?.mode === 'create'
+        ? editErrorText(msg) : RENAME_ERROR_TEXT[msg.code] ?? msg.message ?? "Couldn't rename";
       this.renderBar();
       return true;
     } else {
-      return false;
+      return this.editor.onError(msg);
     }
     this.render();
     return true;
@@ -515,7 +543,7 @@ export class FileSheet {
     if (this.selected.has(entry.path)) this.selected.delete(entry.path);
     else this.selected.set(entry.path, entry);
     this.barError = '';
-    this.renaming = null;
+    this.nameEdit = null;
     this.render();
   }
 
@@ -524,34 +552,59 @@ export class FileSheet {
   startRename() {
     if (this.selected.size !== 1 || this.renameId) return;
     const entry = [...this.selected.values()][0];
-    this.renaming = entry;
+    this.openNameEditor({ mode: 'rename', entry }, entry.name, entry.dir);
+  }
+
+  /// D62: opens the name editor for a new file in the folder shown, with "untitled" selected.
+  startCreate() {
+    const target = this.uploadTarget();
+    if (!target || this.renameId) return;
+    this.openNameEditor({ mode: 'create', dir: target.path }, NEW_FILE_NAME, false);
+  }
+
+  /// The shared name editor (D61, D62); focused inside the tap.
+  openNameEditor(nameEdit, name, dir) {
+    this.nameEdit = nameEdit;
     this.barError = '';
     this.renameError.textContent = '';
-    this.renameInput.value = entry.name;
+    this.renameInput.value = name;
     this.renderBar();
     this.renameInput.focus?.();
-    this.renameInput.setSelectionRange?.(0, renameSelectionEnd(entry.name, entry.dir));
+    this.renameInput.setSelectionRange?.(0, renameSelectionEnd(name, dir));
+  }
+
+  /// D62: opens the one selected file in the text editor.
+  startEdit() {
+    const entry = this.selected.size === 1 ? [...this.selected.values()][0] : null;
+    if (!entry || entry.dir) return;
+    this.nameEdit = null;
+    this.renderBar();
+    this.editor.open(entry.path, entry.name);
   }
 
   cancelRename() {
-    if (!this.renaming) return;
-    this.renaming = null;
+    if (!this.nameEdit) return;
+    this.nameEdit = null;
     this.renameId = null;
     this.renameInput.blur?.();
     this.renderBar();
   }
 
   /// Checks the name on the device, then sends `files.rename`; an unchanged name just closes.
+  /// D62: in create mode, sends `files.create` instead.
   submitRename() {
-    const entry = this.renaming;
-    if (!entry || this.renameId) return;
+    const edit = this.nameEdit;
+    if (!edit || this.renameId) return;
     const name = this.renameInput.value;
-    if (name === entry.name) { this.cancelRename(); return; }
+    if (edit.mode === 'rename' && name === edit.entry.name) { this.cancelRename(); return; }
     const invalid = renameNameError(name);
     if (invalid) { this.renameError.textContent = invalid; return; }
     this.renameError.textContent = '';
     this.renameId = this.nextId();
-    if (!this.send({ t: 'files.rename', id: this.renameId, path: entry.path, name })) {
+    const message = edit.mode === 'create'
+      ? { t: 'files.create', id: this.renameId, dir: edit.dir, name }
+      : { t: 'files.rename', id: this.renameId, path: edit.entry.path, name };
+    if (!this.send(message)) {
       this.renameId = null;
       this.renameError.textContent = 'Not connected to the Mac';
     }
@@ -563,11 +616,24 @@ export class FileSheet {
   onRenamed(msg) {
     if (!msg || msg.id !== this.renameId || typeof msg.newPath !== 'string') return false;
     this.renameId = null;
-    this.renaming = null;
+    this.nameEdit = null;
     this.selected.clear();
     this.renameInput.blur?.();
     this.toast(`Renamed to ${msg.newPath.slice(msg.newPath.lastIndexOf('/') + 1)}`);
-    if (this.found) this.search(); else this.navigate(this.path || '~');
+    this.relist();
+    return true;
+  }
+
+  /// D62: a `files.create.result`; true if it was for this sheet. The folder is listed again
+  /// and the new file opens in the editor.
+  onCreated(msg) {
+    if (!msg || msg.id !== this.renameId || typeof msg.path !== 'string') return false;
+    this.renameId = null;
+    this.nameEdit = null;
+    this.selected.clear();
+    this.renameInput.blur?.();
+    this.relist();
+    this.editor.open(msg.path, msg.path.slice(msg.path.lastIndexOf('/') + 1));
     return true;
   }
 
@@ -643,7 +709,8 @@ export class FileSheet {
 
   renderBar() {
     const items = [...this.selected.values()];
-    const editing = this.renaming != null;
+    const editing = this.nameEdit != null;
+    const creating = this.nameEdit?.mode === 'create';
     this.bar.hidden = items.length === 0 && !this.barError && !editing;
     this.summary.hidden = editing;
     this.summary.textContent = this.barError || selectionSummary(items);
@@ -651,10 +718,12 @@ export class FileSheet {
     this.downloadButton.disabled = items.length === 0 || this.downloadId != null;
     this.downloadButton.textContent = this.downloadId ? 'Preparing…' : 'Download';
     this.renameButton.hidden = editing || items.length !== 1;
+    this.editButton.hidden = editing || items.length !== 1 || items[0].dir;
     this.renameForm.hidden = !editing;
     this.renameInput.disabled = this.renameId != null;
+    this.renameInput.setAttribute('aria-label', creating ? 'New file name' : 'New name');
     this.renameSubmit.disabled = this.renameId != null;
-    this.renameSubmit.textContent = this.renameId ? 'Renaming…' : 'Rename';
+    this.renameSubmit.textContent = creating ? (this.renameId ? 'Creating…' : 'Create') : this.renameId ? 'Renaming…' : 'Rename';
   }
 }
 
