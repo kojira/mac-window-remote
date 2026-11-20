@@ -522,6 +522,7 @@ function connect() {
 /// waiting for the connection (after the camera hid the page) keeps waiting.
 function abandonUploads() {
   folderUploader.abandon();
+  fileSheet.editor.abandon();
   if (imageUpload?.sending) { imageUpload.cancelled = true; imageUpload = null; }
   if (pendingUploads.size > 0) toast('Upload interrupted — try again');
   pendingUploads.clear();
@@ -649,6 +650,15 @@ function onMessage(msg) {
       break;
     case 'files.rename.result':
       fileSheet.onRenamed(msg);
+      break;
+    case 'files.create.result':
+      fileSheet.onCreated(msg);
+      break;
+    case 'files.read.result':
+      fileSheet.editor.onRead(msg);
+      break;
+    case 'files.write.result':
+      fileSheet.editor.onWritten(msg);
       break;
     case 'clipboard.mac':
       macClipboard.onMessage(msg);
@@ -1080,7 +1090,11 @@ const folderUploader = new FolderUploader({
   nextId: () => nextUploadId('p'),
   onDone: (dest) => fileSheet.refreshAfterUpload(dest),
 });
-const fileSheet = new FileSheet({ root: $('files-sheet'), send, download: startDownload, uploader: folderUploader, toast });
+// D62: New file and Edit; the editor saves with a binary message.
+const fileSheet = new FileSheet({
+  root: $('files-sheet'), send, download: startDownload, uploader: folderUploader, toast, sendBinary,
+  confirm: (text) => window.confirm(text),
+});
 
 function openFiles() {
   keyPanel.close();

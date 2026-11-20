@@ -280,7 +280,7 @@ import Testing
     }
 }
 
-private final class StubBackend: SessionBackend, @unchecked Sendable {
+final class StubBackend: SessionBackend, @unchecked Sendable {
     func permissions() -> PermissionsStatus { PermissionsStatus(screenRecording: true, accessibility: true) }
     func listWindows() async throws -> [WindowItem] { [] }
     func startCapture(windowId: UInt32, events: @escaping @Sendable (CaptureEvent) -> Void) async -> CaptureStart { .windowGone }

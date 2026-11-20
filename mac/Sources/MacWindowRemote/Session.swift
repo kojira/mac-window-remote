@@ -476,6 +476,14 @@ actor Session {
             folderFiles.cancel(id: id)
         case .filesRename(let id, let path, let name):
             await renameFile(id: id, path: path, name: name)
+        case .filesCreate(let id, let dir, let name):
+            await editFile(id: id, op: "create") { () throws(FileEdit.Failure) in
+                .filesCreateResult(id: id, path: try FileEdit.create(dir: dir, name: name))
+            }
+        case .filesRead(let id, let path):
+            await editFile(id: id, op: "read") { () throws(FileEdit.Failure) in
+                .filesReadResult(id: id, path: path, contents: try FileEdit.read(path: path))
+            }
         }
     }
 
@@ -561,6 +569,36 @@ actor Session {
             case .notFound: message = "It no longer exists"
             case .invalidName, .badRequest: message = "Invalid name"
             default: message = "Couldn't rename"
+            }
+            await send(.error(code: failure.code, message: message, id: id))
+        }
+    }
+
+    /// D62: a create, read, or write for the text editor, off the actor; logs carry the
+    /// operation and the code, never names, paths, or text.
+    private func editFile(id: String, op: String,
+                          _ body: @escaping @Sendable () throws(FileEdit.Failure) -> ServerMessage) async {
+        let outcome = await Task.detached(priority: .userInitiated) { () -> Result<ServerMessage, FileEdit.Failure> in
+            Result { () throws(FileEdit.Failure) -> ServerMessage in try body() }
+        }.value
+        switch outcome {
+        case .success(let reply):
+            log.info("files.\(op, privacy: .public) done")
+            await send(reply)
+        case .failure(let failure):
+            log.info("files.\(op, privacy: .public) failed code=\(failure.code.rawValue, privacy: .public)")
+            let message: String
+            switch failure.code {
+            case .tooLarge: message = "Too large to edit (over 1 MB)"
+            case .notText: message = "Can't edit this file (not text)"
+            case .notWritable: message = "Can't save here"
+            case .notFound: message = "It no longer exists"
+            case .exists: message = "That name is already used"
+            case .conflict: message = "Changed on the Mac"
+            case .noAccess: message = "No access"
+            case .diskFull: message = "The Mac's disk is full"
+            case .invalidName, .badRequest: message = "Invalid name"
+            default: message = "Couldn't open or save the file"
             }
             await send(.error(code: failure.code, message: message, id: id))
         }
@@ -743,6 +781,12 @@ actor Session {
             await fileChunk(id: id, size: size, offset: offset, bytes: bytes, name: name)
         case .filesPut(let id, let size, let offset, let bytes, let name, let dest):
             await filesPut(id: id, size: size, offset: offset, bytes: bytes, name: name, dest: dest)
+        case .filesWrite(let w):
+            log.info("files.write received bytes=\(w.text.utf8.count, privacy: .public)")
+            await editFile(id: w.id, op: "write") { () throws(FileEdit.Failure) in
+                .filesWriteResult(id: w.id, path: w.path, saved: try FileEdit.write(
+                    path: w.path, text: w.text, baseMtime: w.baseMtime, baseSize: w.baseSize, eol: w.eol, force: w.force))
+            }
         }
     }
 

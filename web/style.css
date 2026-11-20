@@ -230,7 +230,7 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .files-summary { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-download { flex: none; padding: 8px 16px; background: #0a84ff; }
 .files-download:disabled { opacity: 0.5; }
-.files-rename { flex: none; padding: 8px 12px; }
+.files-rename { flex: none; padding: 8px 10px; }
 .files-rename-form { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .files-rename-row { display: flex; gap: 8px; align-items: center; }
 /* 16px keeps iOS Safari from zooming into the field. */
@@ -241,6 +241,29 @@ input[type=text] { font: inherit; font-size: 16px; color: #fff; background: #222
 .files-rename-cancel { flex: none; padding: 8px 12px; }
 .files-rename-error { color: #ff6961; font-size: 13px; }
 .files-rename-error:empty { display: none; }
+.files-new { flex: none; margin-left: auto; padding: 5px 10px; font-size: 13px; border-radius: 14px; }
+.files-new:disabled { opacity: 0.4; }
+.files-new + .files-upload { margin-left: 0; }
+.files-edit { flex: none; padding: 8px 10px; }
+
+/* D62: the plain-text editor covers the Files sheet; fixed, so its top and height can follow
+   the visual viewport while the iOS keyboard is up. */
+.files-editor { position: fixed; top: 0; height: 100%; left: env(safe-area-inset-left); right: env(safe-area-inset-right);
+  max-width: 900px; margin: 0 auto; z-index: 8; display: flex; flex-direction: column; background: #1c1c1e; }
+.files-editor[hidden] { display: none; }
+.files-editor-header { flex: none; display: flex; align-items: center; gap: 8px; padding: calc(env(safe-area-inset-top) + 6px) 8px 6px;
+  border-bottom: 1px solid #2c2c2e; }
+.files-editor-name { flex: 1; min-width: 0; text-align: center; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-editor-dirty { color: #0a84ff; }
+.files-editor-close, .files-editor-save { flex: none; padding: 8px 14px; }
+.files-editor-save { background: #0a84ff; }
+.files-editor-save:disabled { opacity: 0.5; }
+/* 16px keeps iOS Safari from zooming into the field. */
+.files-editor-text { flex: 1; min-height: 0; width: 100%; resize: none; margin: 0; padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
+  border: 0; border-radius: 0; background: #111; color: inherit; font: 16px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; tab-size: 4; }
+.files-editor-message { flex: none; margin: 0; padding: 8px 12px; color: #aaa; font-size: 13px; }
+.files-editor-message:empty { display: none; }
 
 #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(env(safe-area-inset-top) + 56px);
   max-width: 90%; background: rgba(60, 60, 60, 0.95); padding: 10px 14px; border-radius: 10px; z-index: 10; font-size: 14px; }
