@@ -2201,6 +2201,8 @@ On the real Mac and iPhone:
 ## 24. Desktop browser with a mouse and a physical keyboard (user decision, Issue #19)
 
 ### D45. Mouse and keyboard on a PC browser; the iPhone is unchanged
+
+> *D63 (owner request):* ⌥/Alt + wheel (or a two-finger trackpad scroll) pans the zoomed view instead of scrolling the Mac window, the desktop counterpart of the phone's two-finger pan. Plain wheel still scrolls the Mac; Ctrl+wheel (pinch) still zooms. Three-finger trackpad gestures never reach the page (the OS takes them).
 - **Why (user request):** operate the Mac window from a desktop browser as directly as sitting
   at the Mac. Touch input (D23, D24) and the iPhone text field (D10, D34) do not change.
 - **Mouse (`pointerType === 'mouse'`).** Absolute mapping: the point under the mouse on the

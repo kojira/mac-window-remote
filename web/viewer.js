@@ -311,6 +311,13 @@ export class Viewer {
       return;
     }
     const { dx, dy } = wheelPixels(e, this.stage.clientHeight);
+    // D63: ⌥/Alt + wheel pans the zoomed view instead of scrolling the Mac window.
+    if (e.altKey) {
+      this.tx += dx;
+      this.ty += dy;
+      this.clampAndApply();
+      return;
+    }
     this.queueScroll(dx, dy);
   }
 
