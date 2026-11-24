@@ -381,6 +381,8 @@ following:
 A tap moves at most 10 px and lasts at most 400 ms. The Fit button resets zoom and pan.
 
 ### D15. Frames stop when nobody is watching
+
+> *D66 (owner report):* after returning from the background, iOS sometimes left the `<video>` paused (black stage with a system ▶︎ that did nothing, until another window was picked). The page now resumes a paused video that has a stream on `pause`, on becoming visible, and on the next touch/click.
 - Capture runs only between `view.start` and `view.stop` or disconnect, and only for the
   one selected window.
 - When the page becomes hidden (`visibilitychange`), for example because the phone is
@@ -764,6 +766,7 @@ auth, the window list, text input (D10), permissions (D16), and later-slice feat
 (D22). Slices 2–4 keep their order after this revision ships.
 
 ### D20. WebRTC library for the Mac: `stasel/WebRTC` (SwiftPM binary xcframework)
+
 - **Package:** `https://github.com/stasel/WebRTC.git`, pinned with `exact: "153.0.0"`
   (Chromium milestone M153). This is a binary target: a prebuilt, universal
   (arm64 + x86_64) `WebRTC.xcframework`, about 45 MB to download. It needs no Chromium
