@@ -394,6 +394,24 @@ function unlockAudioOnTouch() {
   document.addEventListener('click', unlock, true);
 }
 
+/// D66: iOS sometimes leaves the <video> paused after the page returns from the background (its
+/// play() at reconnect is rejected), which shows a black stage with a system ▶︎ that the stage's
+/// touch handlers swallow. Resume it whenever it is paused while it has a stream: on `pause`,
+/// when the page becomes visible, and on the next touch or click (a user gesture always works).
+function keepVideoPlaying(video) {
+  const resume = () => {
+    if (!video.paused || !video.srcObject || document.hidden) return;
+    const p = video.play();
+    if (p && p.catch) p.catch(() => { /* retried on the next touch */ });
+  };
+  video.addEventListener('pause', () => setTimeout(resume, 0));
+  document.addEventListener('visibilitychange', resume);
+  document.addEventListener('touchend', resume, true);
+  document.addEventListener('click', resume, true);
+  return resume;
+}
+keepVideoPlaying($('video'));
+
 /// A new peer connection is ready: its audio track goes to the element, and the Mac gets the
 /// mode again (it does not keep it).
 function onAudioReady(track) {
