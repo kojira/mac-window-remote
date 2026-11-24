@@ -933,6 +933,8 @@ file.
   and three-finger gestures during a drag lock work normally and keep the button held.
 
 ### D24. Relative cursor and the cursor overlay
+
+> *D65 (owner request):* while zoomed in, moving the arrow with the trackpad past the visible area scrolls the view along, keeping the arrow 32 CSS px inside the edge (clamped to the image as usual). Only the user's own moves do this; when the Mac moves the cursor (a click elsewhere, an app warping it) the view stays put.
 - **Source of truth:** the Mac owns the cursor position for the viewed window, stored
   as window-normalized coordinates `(cu, cv)` in [0, 1] × [0, 1] on the input actor.
   It starts at the window's center when viewing starts.

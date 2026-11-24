@@ -5,6 +5,8 @@ import { GestureRecognizer, LONG_PRESS_MS } from './gestures.js';
 import { clickCount, mouseButtonName, pinchFactor, stageToWindow, wheelPixels } from './desktop.js';
 
 const MAX_ZOOM = 8;
+/// D65: how far inside the stage edge the followed arrow is kept, in CSS px.
+const FOLLOW_MARGIN = 32;
 /// A thumb-sized swipe covers a useful distance of the window (D24).
 const SENSITIVITY = 1.5;
 
@@ -368,7 +370,7 @@ export class Viewer {
       const move = { seq: this.nextSeq++, dx: clamp1(m.dx), dy: clamp1(m.dy) };
       if (this.send({ t: 'move', ...move })) {
         this.sentMoves.push(move);
-        this.placeCursor();
+        this.followCursor();
       }
     }
     if (s) this.send({ t: 'scroll', du: clamp1(s.du), dv: clamp1(s.dv) });
@@ -385,6 +387,22 @@ export class Viewer {
     let { u, v } = this.cursorBase;
     for (const m of this.sentMoves) { u = clamp01(u + m.dx); v = clamp01(v + m.dy); }
     return { u, v };
+  }
+
+  /// D65: while zoomed in, moving the pointer past the visible area scrolls the view along so
+  /// the arrow stays FOLLOW_MARGIN px inside the stage (only for the user's own moves; the
+  /// view stays put when the Mac moves the cursor). The usual clamp keeps the image edges.
+  followCursor() {
+    if (!this.cursorBase || !this.size) { this.placeCursor(); return; }
+    const { u, v } = this.predictedCursor();
+    const x = this.tx + u * this.size.width * this.scale;
+    const y = this.ty + v * this.size.height * this.scale;
+    const sw = this.stage.clientWidth;
+    const sh = this.stage.clientHeight;
+    const m = Math.min(FOLLOW_MARGIN, sw / 4, sh / 4);
+    if (x < m) this.tx += m - x; else if (x > sw - m) this.tx -= x - (sw - m);
+    if (y < m) this.ty += m - y; else if (y > sh - m) this.ty -= y - (sh - m);
+    this.clampAndApply();
   }
 
   /// The arrow is the phone's pointer; a desktop mouse shows its own cursor (D45).
