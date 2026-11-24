@@ -16,6 +16,9 @@ export const TAP_SLOP = 8;
 export const TAP_MAX_MS = 250;
 export const LONG_PRESS_MS = 450;
 export const PINCH_START = 12;
+/// D64: a 2-finger scroll becomes a pinch once the finger distance has changed this much since
+/// the gesture started (a pinch that began with a little drift was stuck as a scroll).
+export const PINCH_FROM_SCROLL = 30;
 
 const byId = (touches) => [...touches].sort((a, b) => a.id - b.id);
 const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -81,6 +84,10 @@ export class GestureRecognizer {
       if (g.phase === 'pending') {
         if (Math.abs(d - g.dist0) >= PINCH_START) g.phase = 'pinch';
         else if (g.moved) g.phase = 'scroll';
+      } else if (g.phase === 'scroll' && Math.abs(d - g.dist0) >= PINCH_FROM_SCROLL) {
+        g.phase = 'pinch';
+        g.dist = d;
+        g.mid = mid;
       }
       const dx = mid.x - g.mid.x;
       const dy = mid.y - g.mid.y;

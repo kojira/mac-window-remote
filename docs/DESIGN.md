@@ -917,6 +917,10 @@ file.
   - `PINCH_START = 12` CSS px change in finger distance decides pinch over 2-finger
     scroll. Once a 2-finger gesture is classified, it stays that kind until all fingers
     lift.
+    *D64 (owner request):* except that a scroll becomes a pinch once the finger distance has
+    changed by `PINCH_FROM_SCROLL = 30` CSS px since the gesture began, so a pinch that started
+    with a little drift (often over a scrollable area) still zooms. A pinch never turns into a
+    scroll.
 - **States:** `idle → one(pending) → one(moving) | tap | longPress`,
   `idle → two(pending) → two(scroll) | two(pinch) | twoTap`, and
   `three(pan)`. Adding a finger upgrades the gesture (1→2→3) and cancels a pending tap;

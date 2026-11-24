@@ -94,11 +94,23 @@ test('finger distance change classifies a pinch, which stays a pinch', () => {
   assert.deepEqual(g.touchEnd([], 30), []);
 });
 
-test('scroll stays a scroll when the distance later changes', () => {
+test('scroll stays a scroll when the distance changes a little', () => {
   const g = new GestureRecognizer();
   g.touchStart([P(1, 100, 100), P(2, 160, 100)], 0);
   assert.deepEqual(types(g.touchMove([P(1, 100, 110), P(2, 160, 110)], 10)), ['scroll']);
-  assert.deepEqual(types(g.touchMove([P(1, 80, 120), P(2, 180, 120)], 20)), ['scroll']);
+  assert.deepEqual(types(g.touchMove([P(1, 90, 120), P(2, 170, 120)], 20)), ['scroll']);
+});
+
+test('D64: a scroll turns into a pinch when the fingers spread or close far enough', () => {
+  const g = new GestureRecognizer();
+  g.touchStart([P(1, 100, 100), P(2, 160, 100)], 0);
+  assert.deepEqual(types(g.touchMove([P(1, 100, 110), P(2, 160, 110)], 10)), ['scroll']);
+  // Distance 60 → 100: the switch re-anchors, so it does not jump (factor 1, no movement).
+  assert.deepEqual(g.touchMove([P(1, 80, 110), P(2, 180, 110)], 20), [{ type: 'zoom', factor: 1, x: 130, y: 110, dx: 0, dy: 0 }]);
+  const z = g.touchMove([P(1, 70, 110), P(2, 190, 110)], 30);
+  assert.deepEqual(types(z), ['zoom']);
+  assert.equal(z[0].factor, 120 / 100);
+  assert.deepEqual(g.touchEnd([], 40), []);
 });
 
 test('three-finger move pans the view', () => {
