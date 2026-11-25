@@ -40,13 +40,20 @@ struct AXMenuSource: MenuSource {
         AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
     }
 
-    private func children(_ element: AXUIElement) -> [AXUIElement] {
-        attribute(element, kAXChildrenAttribute) ?? []
-    }
+    private func children(_ element: AXUIElement) -> [AXUIElement] { AXRead.children(element) }
 
-    private func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
+    private func attribute<T>(_ element: AXUIElement, _ name: String) -> T? { AXRead.attribute(element, name) }
+}
+
+/// Attribute reads shared by the AX sources (D43, D67). Reads only; nothing is set or performed.
+enum AXRead {
+    static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value as? T
+    }
+
+    static func children(_ element: AXUIElement) -> [AXUIElement] {
+        attribute(element, kAXChildrenAttribute) ?? []
     }
 }

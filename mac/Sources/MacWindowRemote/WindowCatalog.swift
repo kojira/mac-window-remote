@@ -23,7 +23,8 @@ enum WindowCatalog {
             app: w.owningApplication?.applicationName ?? "",
             title: w.title ?? "",
             w: w.frame.width,
-            h: w.frame.height)
+            h: w.frame.height,
+            bundleId: w.owningApplication?.bundleIdentifier)
     }
 
     static func list() async throws -> [WindowItem] {
