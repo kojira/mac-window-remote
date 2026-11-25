@@ -40,10 +40,11 @@ export function decodeDisplays(msg) {
 }
 
 /// Bottom-bar buttons shown for a target: a display has no app menu (☰) and no window to fit
-/// (📱) (D43, D35); in their place it has ⧉, view the front window (D59).
-export function viewerControls(target) {
+/// (📱) (D43, D35); in their place it has ⧉, view the front window (D59). 📄, the Terminal text
+/// view (D67), is shown only for a window the Mac said offers it (`termText` on `streaming`).
+export function viewerControls(target, { termText = false } = {}) {
   const display = isDisplay(target);
-  return { appMenu: !display, fitWindow: !display, frontWindow: display };
+  return { appMenu: !display, fitWindow: !display, frontWindow: display, termText: !display && termText === true };
 }
 
 /// D59: asks the Mac which window to view instead of the display `target`, or null for a window.

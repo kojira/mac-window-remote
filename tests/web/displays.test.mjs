@@ -93,9 +93,9 @@ test('a display target: view.start, view.state matching, and the window path unc
 });
 
 test('☰ and 📱 are hidden for a display and shown for a window; ⧉ only for a display (D59)', () => {
-  assert.deepEqual(viewerControls(displayTarget({ id: 2, name: 'S' })), { appMenu: false, fitWindow: false, frontWindow: true });
-  assert.deepEqual(viewerControls({ id: 7, app: 'A', title: 't' }), { appMenu: true, fitWindow: true, frontWindow: false });
-  assert.deepEqual(viewerControls(null), { appMenu: true, fitWindow: true, frontWindow: false });
+  assert.deepEqual(viewerControls(displayTarget({ id: 2, name: 'S' })), { appMenu: false, fitWindow: false, frontWindow: true, termText: false });
+  assert.deepEqual(viewerControls({ id: 7, app: 'A', title: 't' }), { appMenu: true, fitWindow: true, frontWindow: false, termText: false });
+  assert.deepEqual(viewerControls(null), { appMenu: true, fitWindow: true, frontWindow: false, termText: false });
 });
 
 test('D59: ⧉ sends view.front for the viewed display, and the reply opens the window like a list pick', () => {
@@ -107,7 +107,7 @@ test('D59: ⧉ sends view.front for the viewed display, and the reply opens the 
   // The list's pick path: a window target, view.start {windowId}, ☰ and 📱 back, ⧉ gone.
   assert.ok(!isDisplay(w));
   assert.deepEqual(viewStartMessage(w), { t: 'view.start', windowId: 7 });
-  assert.deepEqual(viewerControls(w), { appMenu: true, fitWindow: true, frontWindow: false });
+  assert.deepEqual(viewerControls(w), { appMenu: true, fitWindow: true, frontWindow: false, termText: false });
   assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 2 }, d), 'none', 'the no-window toast');
   assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 3, windowId: 7 }, d), null, 'another display');
   assert.equal(frontWindowResult({ t: 'view.front.result', displayId: 2, windowId: 7 }, w), null, 'already on a window');

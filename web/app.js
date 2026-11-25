@@ -15,6 +15,7 @@ import {
   viewStateMatches, viewerControls,
 } from './displays.js';
 import { MacClipboard } from './macclip.js';
+import { TerminalView, isCopyShortcut } from './termview.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import { MicControl, micAriaLabel } from './mic.js';
 import {
@@ -119,6 +120,7 @@ function renderWindows(items) {
 
 function showList() {
   sessionStorage.removeItem(WINDOW_KEY);
+  closeTermView();
   slotBar.closeMenu();
   slotBar.render();
   viewer.clear();
@@ -163,6 +165,7 @@ function enterViewer(w) {
   const stored = { id: w.id, app: w.app, title: w.title };
   if (isDisplay(w)) stored.display = true;
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify(stored));
+  closeTermView();
   viewer.clear();
   show('viewer');
   focusKeySink();
@@ -281,6 +284,7 @@ function onViewSwitched(msg) {
   if (!w || screen !== 'viewer' || w.id === viewingWindowId()) return;
   menuSheet.close();
   sessionStorage.setItem(WINDOW_KEY, JSON.stringify(w));
+  closeTermView();
   viewer.clear();
   slotBar.render();
   renderFitWindow();
@@ -295,8 +299,9 @@ const fittedWindows = new Map();
 
 function renderFitWindow() {
   // D56: a display has no app menu and no window to fit.
-  const controls = viewerControls(viewingTarget());
+  const controls = viewerControls(viewingTarget(), { termText: termTextWindowId != null && termTextWindowId === viewingWindowId() });
   $('app-menu').hidden = !controls.appMenu;
+  renderTermToggle(controls.termText);
   $('fit-window').hidden = !controls.fitWindow;
   $('front-window').hidden = !controls.frontWindow;
   const b = $('fit-window');
@@ -345,6 +350,45 @@ function viewingWindow() {
 
 function viewingWindowId() {
   return viewingWindow()?.id ?? null;
+}
+
+// ---------- 📄 Terminal text view (D67) ----------
+
+/// The window the Mac said offers the text view (`termText` on its `streaming`), or null.
+let termTextWindowId = null;
+
+function renderTermToggle(offered) {
+  const b = $('term-toggle');
+  b.hidden = !offered;
+  const on = termView.isOpen();
+  b.classList.toggle('active', on);
+  b.setAttribute('aria-pressed', String(on));
+}
+
+/// Switching windows, leaving the viewer, or the window closing: back to the video, zoom as is.
+function closeTermView() {
+  termTextWindowId = null;
+  termView.close();
+}
+
+$('term-toggle').addEventListener('click', () => {
+  const id = viewingWindowId();
+  if (screen !== 'viewer' || id == null || termTextWindowId !== id) return;
+  if (termView.isOpen()) termView.close();
+  else termView.open(id);
+  renderFitWindow();
+});
+
+/// A `streaming` for the viewed window: whether it offers 📄; an open text view asks again,
+/// since a reconnect or a capture retry started a new view on the Mac.
+function onTermOffer(msg) {
+  const id = viewingWindowId();
+  termTextWindowId = msg.termText === true && msg.windowId === id ? id : null;
+  if (termView.isOpen()) {
+    if (termTextWindowId === null) termView.close();
+    else termView.restart();
+  }
+  renderFitWindow();
 }
 
 // ---------- Mac audio on the iPhone (D39) ----------
@@ -681,6 +725,12 @@ function onMessage(msg) {
     case 'clipboard.mac':
       macClipboard.onMessage(msg);
       break;
+    case 'term.text':
+      termView.onText(msg);
+      break;
+    case 'term.error':
+      termView.onError(msg);
+      break;
     case 'error':
       if (folderUploader.onReply(msg)) break;
       else if (msg.id != null && pendingUploads.has(msg.id)) onUploadReply(msg);
@@ -742,6 +792,7 @@ function onViewState(msg) {
       viewMessage('');
       viewer.setDimmed(false);
       viewer.awaitFirstFrame();
+      if (!isDisplay(target)) onTermOffer(msg);
       break;
     case 'window_gone':
       // D56: a disconnected display ends the view the same way as a closed window.
@@ -1089,6 +1140,19 @@ const keyPanel = new KeyPanel({
   onAction: (action) => ({ paste: () => clipboardToMac('paste'), copy: () => clipboardToMac('copy'), image: pickImage, file: pickFile, download: openFiles }[action]?.()),
 });
 
+// D67: the Terminal text view over the stage; 📄 or "Back to video" closes it.
+const termView = new TerminalView({
+  root: $('term-view'),
+  send,
+  toast,
+  clipboard: navigator.clipboard ?? null,
+  onExit: () => { termView.close(); renderFitWindow(); },
+});
+document.addEventListener('selectionchange', () => termView.onSelectionChange());
+// A desktop click in the text that selects nothing gives the keys back to the key sink (IME).
+termView.pre.addEventListener('mouseup', () => setTimeout(() => { if (!termView.hasSelection()) focusKeySink(); }, 0));
+termView.fontSelect.addEventListener('change', () => setTimeout(focusKeySink, 0));
+
 // Text copied on the Mac goes to this device's clipboard (D51).
 const macClipboard = new MacClipboard({
   root: $('mac-clip'),
@@ -1134,6 +1198,8 @@ const desktopKeys = new DesktopKeyboard({
   isActive: () => screen === 'viewer' && isDesktop() && $('paste-sheet').hidden && $('menu-sheet').hidden && $('files-sheet').hidden
     && $('slot-menu').hidden && !keyPanel.isMenuOpen() && !textInput.isFocused(),
   send: sendInput,
+  // D67: ⌘C / Ctrl+C with text selected in the text view copies it here, not on the Mac.
+  keepLocal: (e) => isCopyShortcut(e) && termView.hasSelection(),
 });
 
 function focusKeySink() {
@@ -1142,8 +1208,9 @@ function focusKeySink() {
 
 // A click on a bottom-bar or panel button gives focus back to the key sink, so an IME keeps
 // composing there.
+// D67: not from the text view's text or font menu, so a mouse selection there stays.
 $('viewer').addEventListener('click', (e) => {
-  if (e.target.closest?.('#stage, #text')) return;
+  if (e.target.closest?.('#stage, #text, .term-text, .term-font')) return;
   setTimeout(focusKeySink, 0);
 });
 
