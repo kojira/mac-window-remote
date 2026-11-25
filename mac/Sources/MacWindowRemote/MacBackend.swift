@@ -231,6 +231,10 @@ final class MacBackend: SessionBackend, @unchecked Sendable {
         displayAssertion.declareUserActivity()
     }
 
+    // MARK: Terminal text view (D67)
+
+    func terminalTextSource() -> (any TerminalTextSource)? { AXTerminalTextSource() }
+
     func frontWindow(onDisplay displayId: UInt32) async -> WindowItem? {
         guard let frame = DisplayCatalog.frame(displayId) else { return nil }
         let windows = (try? await WindowCatalog.shareableWindows()) ?? []

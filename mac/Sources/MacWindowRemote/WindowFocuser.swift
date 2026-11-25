@@ -62,7 +62,11 @@ enum WindowFocuser {
     /// The app's AX window whose frame matches the CG `bounds` (within 1 pt), preferring the
     /// one with the same title (D8, D35).
     static func axWindow(pid: pid_t, bounds: CGRect, title: String?) -> AXUIElement? {
-        let app = AXUIElementCreateApplication(pid)
+        axWindow(app: AXUIElementCreateApplication(pid), bounds: bounds, title: title)
+    }
+
+    /// The same match on an app element the caller made (D67 sets its messaging timeout).
+    static func axWindow(app: AXUIElement, bounds: CGRect, title: String?) -> AXUIElement? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement] else { return nil }

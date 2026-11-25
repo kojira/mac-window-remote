@@ -60,6 +60,13 @@ protocol SessionBackend: Sendable {
     /// D59: the pickable window to view instead of display `displayId`, or nil
     /// (`WindowCatalog.frontWindowId(onDisplay:…)`).
     func frontWindow(onDisplay displayId: UInt32) async -> WindowItem?
+    /// D67: reads a terminal window's text for the text view; nil when it cannot be read here.
+    func terminalTextSource() -> (any TerminalTextSource)?
+}
+
+/// Backends without the Terminal text view (D67): the test fakes of other features.
+extension SessionBackend {
+    func terminalTextSource() -> (any TerminalTextSource)? { nil }
 }
 
 /// Backends without displays: the test fakes of window-mode features.
@@ -229,8 +236,15 @@ actor Session {
 
     // Viewing state
     private var viewingWindowId: UInt32? {
-        didSet { if viewingWindowId == nil { viewedPid = nil } }
+        didSet { if viewingWindowId == nil { viewedPid = nil; viewedBundleId = nil } }
     }
+    /// The viewed window's app bundle id, once its capture started (D67).
+    private var viewedBundleId: String?
+    /// D67: polls the viewed Terminal window's text while the page shows 📄 (made at the first
+    /// `term.start`); `termGen` is the running start's generation, nil while stopped, so a late
+    /// outcome of a stopped start is dropped.
+    private var termPoller: TerminalTextPoller<ContinuousClock>?
+    private var termGen: Int?
     /// The viewed window's app, once its capture started; App audio taps it (D39).
     private var viewedPid: pid_t? { didSet { applyAudio() } }
     /// The viewed display (D56); nil while a window or nothing is viewed.
@@ -432,6 +446,7 @@ actor Session {
             await input.submit(start ? .dragStart : .dragEnd)
         case .text(let text):
             await input.submit(.text(text))
+            if termGen != nil { await termPoller?.inputArrived() }
         case .key(let name, let mods):
             if InputAction.Kind.isWindowSwitch(name, mods), let windowId = viewingWindowId {
                 // The viewer follows the window that ⌘Tab or ⌘F1 brings forward (D38).
@@ -445,6 +460,7 @@ actor Session {
             } else {
                 await input.submit(.key(name, mods: mods))
             }
+            if termGen != nil { await termPoller?.inputArrived() }
         case .windowFitPhone(let aspect):
             await resizeViewedWindow { backend, id in await backend.fitWindow(windowId: id, aspect: aspect) }
         case .windowRestore:
@@ -484,6 +500,58 @@ actor Session {
             await editFile(id: id, op: "read") { () throws(FileEdit.Failure) in
                 .filesReadResult(id: id, path: path, contents: try FileEdit.read(path: path))
             }
+        case .termStart(let windowId):
+            await startTerminalText(windowId)
+        case .termStop:
+            stopTerminalText()
+        }
+    }
+
+    // MARK: Terminal text view (D67)
+
+    private var viewedWindowOffersText: Bool { TerminalText.isSupported(bundleId: viewedBundleId) }
+
+    private func startTerminalText(_ windowId: UInt32) async {
+        // `poller.start` replaces a running start itself.
+        termGen = nil
+        guard windowId == viewingWindowId, capture != nil, viewedWindowOffersText, let pid = viewedPid else {
+            log.info("term.start refused: not a terminal")
+            await send(.termError(windowId: windowId, code: .notTerminal))
+            return
+        }
+        if termPoller == nil, let source = backend.terminalTextSource() {
+            termPoller = TerminalTextPoller(source: source, clock: ContinuousClock()) { [weak self] gen, id, outcome in
+                await self?.terminalTextOutcome(outcome, windowId: id, gen: gen)
+            }
+        }
+        guard let poller = termPoller else {
+            await send(.termError(windowId: windowId, code: .notTerminal))
+            return
+        }
+        log.info("term.start")
+        termGen = await poller.start(windowId: windowId, pid: pid)
+    }
+
+    private func stopTerminalText() {
+        guard let gen = termGen, let poller = termPoller else { return }
+        termGen = nil
+        Task { await poller.stop(gen: gen) }
+    }
+
+    private func terminalTextOutcome(_ outcome: TerminalTextWatch.Outcome, windowId: UInt32, gen: Int) async {
+        guard gen == termGen, windowId == viewingWindowId, !closed else { return }
+        if case .send = outcome {} else { termGen = nil }
+        switch outcome {
+        case .unchanged:
+            return
+        case .send(let text, let rev):
+            log.debug("term.text rev=\(rev, privacy: .public) bytes=\(text.utf8.count, privacy: .public)")
+            await send(.termText(windowId: windowId, text: text, rev: rev))
+        case .error(let code):
+            log.info("term.error code=\(code.rawValue, privacy: .public)")
+            await send(.termError(windowId: windowId, code: code))
+        case .windowGone:
+            await captureEvent(.windowGone, windowId: windowId)
         }
     }
 
@@ -1042,11 +1110,12 @@ actor Session {
         case .started(let handle, let window):
             capture = handle
             viewedPid = window.pid
+            viewedBundleId = window.bundleId
             backend.viewingChanged(window)
             peer?.setViewingDisplay(false)
             await input.setTarget(.window(windowId))
             await hub?.statusChanged(self, .viewing(app: window.app, title: window.title))
-            await send(.viewState(windowId: windowId, state: .streaming, reason: nil))
+            await send(.viewState(windowId: windowId, state: .streaming, reason: nil, termText: viewedWindowOffersText))
         case .windowGone:
             viewingWindowId = nil
             await input.setTarget(nil)
@@ -1155,6 +1224,7 @@ actor Session {
     }
 
     private func stopViewing() {
+        stopTerminalText()
         retryTask?.cancel()
         retryTask = nil
         if let capture {

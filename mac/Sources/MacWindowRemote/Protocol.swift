@@ -130,6 +130,9 @@ enum ClientMessage: Equatable {
     case filesCreate(id: String, dir: String, name: String)
     /// D62: read the text file at `path` for the editor.
     case filesRead(id: String, path: String)
+    /// D67: send the viewed Terminal window's text (`term.text`) until `term.stop`.
+    case termStart(windowId: UInt32)
+    case termStop
 }
 
 /// A desktop mouse button (D45).
@@ -377,6 +380,10 @@ extension ClientMessage {
             let path = try require(e.path, "path")
             guard path.hasPrefix("/"), path.utf8.count <= maxPathBytes else { throw ProtocolError.invalidValue("path") }
             return .filesRead(id: try requestId(), path: path)
+        case "term.start":
+            return .termStart(windowId: try require(e.windowId, "windowId"))
+        case "term.stop":
+            return .termStop
         default:
             throw ProtocolError.unknownType(e.t)
         }
@@ -393,7 +400,7 @@ extension ClientMessage {
         switch self {
         case .windowsList, .viewStart, .viewStop, .displaysList, .viewStartDisplay, .viewFront, .thumbsRequest, .rtcOffer, .rtcIce, .appsList, .appOpen, .menuList, .menuPress,
              .filesList, .filesSearch, .downloadRequest, .filesPutCancel, .filesRename,
-             .filesCreate, .filesRead:
+             .filesCreate, .filesRead, .termStart, .termStop:
             return .socket
         case .move, .scroll, .point: return .motion
         case .mouse, .click, .rightClick, .drag, .text, .key, .windowFitPhone, .windowRestore, .audio, .mic: return .control
@@ -434,6 +441,8 @@ extension ClientMessage {
         case .filesRename: return "files.rename"
         case .filesCreate: return "files.create"
         case .filesRead: return "files.read"
+        case .termStart: return "term.start"
+        case .termStop: return "term.stop"
         }
     }
 }
@@ -565,6 +574,8 @@ struct WindowItem: Codable, Equatable {
     var title: String
     var w: Double
     var h: Double
+    /// The app's bundle id; D67 offers the text view by it.
+    var bundleId: String? = nil
 }
 
 /// One connected display for the Displays tab (D56). `w` and `h` are points; `jpeg` is a
@@ -587,7 +598,8 @@ enum ViewState: String, Codable {
 enum ServerMessage {
     case hello(permissions: PermissionsStatus)
     case windows([WindowItem])
-    case viewState(windowId: UInt32, state: ViewState, reason: String?)
+    /// `termText` (D67): the window offers the Terminal text view; sent with `streaming`.
+    case viewState(windowId: UInt32, state: ViewState, reason: String?, termText: Bool = false)
     /// The Displays tab list (D56).
     case displays([DisplayItem])
     /// `view.state` for a viewed display (D56); `window_gone` means the display was removed.
@@ -635,11 +647,15 @@ enum ServerMessage {
     case filesWriteResult(id: String, path: String, saved: FileEdit.Saved)
     /// Text copied on the Mac (D51); nil text means it was over 1 MiB and is not sent.
     case clipboardMac(seq: Int, text: String?)
+    /// D67: the viewed Terminal window's text; `rev` rises with each changed text.
+    case termText(windowId: UInt32, text: String, rev: Int)
+    /// D67: the text view cannot be shown for `windowId`.
+    case termError(windowId: UInt32?, code: TerminalTextError)
 
     private struct Hello: Encodable { let t = "hello"; let server = "0.1"; let permissions: PermissionsStatus }
     private struct Windows: Encodable { let t = "windows"; let items: [WindowItem] }
     private struct View: Encodable {
-        let t = "view.state"; let windowId: UInt32; let state: ViewState; let reason: String?
+        let t = "view.state"; let windowId: UInt32; let state: ViewState; let reason: String?; let termText: Bool?
     }
     private struct Displays: Encodable {
         struct Item: Encodable { let id: UInt32; let name: String; let w: Double; let h: Double; let jpeg: String? }
@@ -685,6 +701,8 @@ enum ServerMessage {
     private struct ClipboardMac: Encodable {
         let t = "clipboard.mac"; let seq: Int; let text: String?; let truncated: Bool?
     }
+    private struct TermText: Encodable { let t = "term.text"; let windowId: UInt32; let text: String; let rev: Int }
+    private struct TermError: Encodable { let t = "term.error"; let windowId: UInt32?; let code: TerminalTextError }
     private struct Audio: Encodable { let t = "audio.state"; let mode: AudioMode }
     private struct Mic: Encodable { let t = "mic.state"; let on: Bool; let device: String?; let error: String? }
     private struct Result: Encodable { let t = "result"; let id: String; let ok = true; let path: String? }
@@ -713,8 +731,8 @@ enum ServerMessage {
         switch self {
         case .hello(let p): data = try? encoder.encode(Hello(permissions: p))
         case .windows(let items): data = try? encoder.encode(Windows(items: items))
-        case .viewState(let id, let state, let reason):
-            data = try? encoder.encode(View(windowId: id, state: state, reason: reason))
+        case .viewState(let id, let state, let reason, let termText):
+            data = try? encoder.encode(View(windowId: id, state: state, reason: reason, termText: termText ? true : nil))
         case .displays(let items):
             data = try? encoder.encode(Displays(items: items.map {
                 Displays.Item(id: $0.id, name: $0.name, w: $0.w, h: $0.h, jpeg: $0.jpeg?.base64EncodedString())
@@ -772,6 +790,10 @@ enum ServerMessage {
             data = try? encoder.encode(WriteResult(id: id, path: path, mtime: saved.mtime, size: saved.size))
         case .clipboardMac(let seq, let text):
             data = try? encoder.encode(ClipboardMac(seq: seq, text: text, truncated: text == nil ? true : nil))
+        case .termText(let windowId, let text, let rev):
+            data = try? encoder.encode(TermText(windowId: windowId, text: text, rev: rev))
+        case .termError(let windowId, let code):
+            data = try? encoder.encode(TermError(windowId: windowId, code: code))
         }
         return String(decoding: data ?? Data(), as: UTF8.self)
     }

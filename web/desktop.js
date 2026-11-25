@@ -94,11 +94,13 @@ export function stageToWindow(x, y, { tx, ty, scale, width, height }, clamp) {
 /// Physical keys for the viewed window (D45). Keys arrive on `sink`, a hidden textarea that
 /// holds focus while the viewer is active on a desktop, so an IME can compose into it.
 /// isActive(): the viewer is shown with no sheet or text field in use. send(msg): control.
+/// keepLocal(e): this key stays in the browser, e.g. ⌘C with text selected in the D67 text view.
 export class DesktopKeyboard {
-  constructor({ sink, isActive, send }) {
+  constructor({ sink, isActive, send, keepLocal = () => false }) {
     this.sink = sink;
     this.isActive = isActive;
     this.send = send;
+    this.keepLocal = keepLocal;
     this.composing = false;
     this.forwarded = new Set(); // codes whose keydown was forwarded, so their keyup is eaten too
     if (!sink) return;
@@ -126,7 +128,7 @@ export class DesktopKeyboard {
   }
 
   onKeyDown(e) {
-    if (this.composing || !this.isActive() || !this.focusedHere()) return;
+    if (this.composing || !this.isActive() || !this.focusedHere() || this.keepLocal(e)) return;
     const msg = keyMessage(e);
     if (!msg) return;
     e.preventDefault();
