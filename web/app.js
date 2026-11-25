@@ -15,7 +15,7 @@ import {
   viewStateMatches, viewerControls,
 } from './displays.js';
 import { MacClipboard } from './macclip.js';
-import { TerminalView, isCopyShortcut } from './termview.js';
+import { TerminalView, isAtBottom, isCopyShortcut } from './termview.js';
 import { AUDIO_KEY, AudioMode, AudioOutput, audioAriaLabel, audioButtonLabel } from './audio.js';
 import { MicControl, micAriaLabel } from './mic.js';
 import {
@@ -1149,6 +1149,19 @@ const termView = new TerminalView({
   onExit: () => { termView.close(); renderFitWindow(); },
 });
 document.addEventListener('selectionchange', () => termView.onSelectionChange());
+// With the iOS keyboard up the dock rides above it (D53); the layer then ends at the dock's top,
+// so the latest output and the prompt stay visible while typing.
+if (window.visualViewport) {
+  const vv = window.visualViewport;
+  const placeTermView = () => {
+    const covered = window.innerHeight - vv.height - vv.offsetTop;
+    const atBottom = termView.isOpen() && isAtBottom(termView.pre);
+    termView.root.style.bottom = covered > 0 ? `${covered + $('dock').offsetHeight}px` : '';
+    if (atBottom) termView.scrollToBottom();
+  };
+  vv.addEventListener('resize', placeTermView);
+  vv.addEventListener('scroll', placeTermView);
+}
 // A desktop click in the text that selects nothing gives the keys back to the key sink (IME).
 termView.pre.addEventListener('mouseup', () => setTimeout(() => { if (!termView.hasSelection()) focusKeySink(); }, 0));
 termView.fontSelect.addEventListener('change', () => setTimeout(focusKeySink, 0));
